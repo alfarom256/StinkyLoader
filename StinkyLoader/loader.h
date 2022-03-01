@@ -46,6 +46,20 @@ __declspec(code_seg(".shlc"))
 __declspec(guard(ignore))
 __declspec(safebuffers)
 uintptr_t load(uintptr_t current_base) {
+	// find the offset of the payload from our reflective loader prelude
+	DWORD cbPeHeaderOffset = 0;
+	uintptr_t old_base_addr = current_base;
+	while (cbPeHeaderOffset < MAXIMUM_HEADER_SEARCH_BYTES) {
+		if (IS_PE_MAGIC(*(WORD*)old_base_addr)) {
+			break;
+		}
+		old_base_addr++;
+	}
+	if (cbPeHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
+	{
+		return -31;
+	}
+
 	// begin initialize loader data
 	uintptr_t k32base = (uintptr_t)getK32();
 	uintptr_t ntbase = (uintptr_t)getNtdll();
@@ -60,28 +74,11 @@ uintptr_t load(uintptr_t current_base) {
 	if (!init_ldr_data(&ldrNtdll, (HMODULE)ntbase)) {
 		return -1;
 	}
+
 	// end initialize loader data
 
-
-
-	DWORD cbPeHeaderOffset = 0;
 	PIMAGE_SECTION_HEADER section = NULL;
 	uintptr_t address_of_entry = 0;
-	uintptr_t old_base_addr = current_base;
-	uintptr_t old_nt_begin = current_base;
-
-	while (cbPeHeaderOffset < MAXIMUM_HEADER_SEARCH_BYTES) {
-		if (IS_PE_MAGIC(*(WORD*)old_base_addr)) {
-			break;
-		}
-		old_base_addr++;
-	}
-
-	if (cbPeHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
-	{
-		return FALSE;
-	}
-
 	LPVOID new_module_base = NULL;
 	uintptr_t baseOffset = 0;
 
@@ -143,17 +140,37 @@ uintptr_t load(uintptr_t current_base) {
 	*/
 
 	stubLoadLibraryA = (pLoadLibraryA)get_from_ldr_data(&ldrKernel32, cdwLoadLibraryA);
+	if (!stubLoadLibraryA)
+		return -40;
+	
 	stubGetProcAddress = (pGetProcAddress)get_from_ldr_data(&ldrKernel32, cdwGetProcAddress);
+	if (!stubGetProcAddress)
+		return -41;
+	
 	stubVirtualProtect = (pVirtualProtect)get_from_ldr_data(&ldrKernel32, cdwVirtualProtect);
+	if (!stubVirtualProtect)
+		return -42;
+	
 	stubFlushInstructionCache = (pFlushInstructionCache)get_from_ldr_data(&ldrKernel32, cdwFlushInstructionCache);
+	if (!stubFlushInstructionCache)
+		return -43;
+	
 	stubGetNativeSystemInfo = (pGetNativeSystemInfo)get_from_ldr_data(&ldrKernel32, cdwGetNativeSystemInfo);
+	if (!stubGetNativeSystemInfo)
+		return -44;
+	
 	stubVirtualFree = (pVirtualFree)get_from_ldr_data(&ldrKernel32, cdwVirtualFree);
+	if (!stubVirtualFree)
+		return -45;
+	
 	stubVirtualAlloc = (pVirtualAlloc)get_from_ldr_data(&ldrKernel32, cdwVirtualAlloc);
+	if (!stubVirtualAlloc)
+		return -46;
+	
 	stubCreateThread = (pCreateThread)get_from_ldr_data(&ldrKernel32, cdwCreateThread);
+	if (!stubCreateThread)
+		return -47;
 
-	if (!(stubLoadLibraryA && stubGetProcAddress && stubVirtualProtect && stubFlushInstructionCache && stubGetNativeSystemInfo && stubVirtualFree && stubCreateThread && stubVirtualAlloc)) {
-		return -3;
-	}
 
 	/*
 	======================================================
@@ -162,16 +179,16 @@ uintptr_t load(uintptr_t current_base) {
 	*/
 
 	stubRtlInitAnsiString = (pRtlInitAnsiString)get_from_ldr_data(&ldrNtdll, cdwRtlInitAnsiString);
+	if (!stubRtlInitAnsiString)
+		return -48;
 	stubLdrGetProcedureAddress = (pLdrGetProcedureAddress)get_from_ldr_data(&ldrNtdll, cdwLdrGetProcedureAddress);
-
+	if (!stubLdrGetProcedureAddress)
+		return -49;
 #ifdef _WIN64
 	stubRtlAddFunctionTable = (pRtlAddFunctionTable)get_from_ldr_data(&ldrNtdll, cdwRtlAddFunctionTable);
-	if (!(stubRtlInitAnsiString && stubRtlAddFunctionTable && stubLdrGetProcedureAddress)) {
-#else
-	if (!(stubRtlInitAnsiString && stubLdrGetProcedureAddress)) {
+	if (!stubRtlAddFunctionTable)
+		return -50;
 #endif
-		return -20;
-	}
 
 
 	/* ====================================================================================================================================================
@@ -317,7 +334,10 @@ uintptr_t load(uintptr_t current_base) {
 		dest = (uintptr_t)new_module_base + pSectionHdr->VirtualAddress;
 		const void* orig_dest = (const void*)(old_base_addr + pSectionHdr->PointerToRawData);
 		// copy it over
-		memcpy((void*)dest, orig_dest, pSectionHdr->SizeOfRawData);
+
+		for (ULONG i = 0; i < pSectionHdr->SizeOfRawData; i++) {
+			((PBYTE)dest)[i] = ((PBYTE)orig_dest)[i];
+		}
 		pSectionHdr->Misc.PhysicalAddress = (DWORD)(dest & 0xffffffff);
 	}
 	/* =========================================================================================================================
@@ -472,10 +492,13 @@ uintptr_t load(uintptr_t current_base) {
 	======================================================
 	*/
 #ifdef _WIN64
+	// https://github.com/monoxgas/sRDI/blob/master/ShellcodeRDI/ShellcodeRDI.c#L530 
+	// forgot to make sure the size AND data exist
 	dataDir = _new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-	if (dataDir.Size) {
+	
+	if (dataDir.Size && stubRtlAddFunctionTable) {
 		//https://reactos.org/wiki/Techwiki:SEH64
-		PRUNTIME_FUNCTION pData = (PRUNTIME_FUNCTION)(_new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION].VirtualAddress + (uintptr_t)new_module_base);
+		PIMAGE_RUNTIME_FUNCTION_ENTRY pData = (PIMAGE_RUNTIME_FUNCTION_ENTRY)(_new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION].VirtualAddress + (uintptr_t)new_module_base);
 		stubRtlAddFunctionTable(pData, (dataDir.Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY)) - 1, (uintptr_t)new_module_base);
 	}
 #endif 
@@ -502,5 +525,5 @@ uintptr_t load(uintptr_t current_base) {
 	pDllMain stubDllMain = (pDllMain)(entrypoint);
 	stubDllMain((HINSTANCE)new_module_base, DLL_PROCESS_ATTACH, NULL);
 	return (uintptr_t)new_module_base;
-	}
+}
 // END LOADER FUNCTION
