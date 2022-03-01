@@ -1,8 +1,4 @@
 #pragma once
-#include <Windows.h>
-#include <winnt.h>
-#include <winternl.h>
-
 #define PE_VAL 0xe4a2
 #define PE_XOR 0xbeef
 #define IS_PE_MAGIC( x ) ((x ^ PE_XOR) == PE_VAL)
@@ -71,7 +67,7 @@ __forceinline BOOL init_ldr_data(PLDR_DATA pLdrDataIn, HMODULE hMod) {
 	{
 		return FALSE;
 	}
-
+	pLdrDataIn->base = hMod;
 	uintptr_t base = (uintptr_t)hMod;
 
 	// get the required items from the export table

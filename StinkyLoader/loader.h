@@ -1,4 +1,9 @@
 #pragma once
+#include <Windows.h>
+#include <winnt.h>
+#include <winternl.h>
+#include "PebLdrInline.h"
+
 #define MAXIMUM_HEADER_SEARCH_BYTES 0x3000
 
 typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);

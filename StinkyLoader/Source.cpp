@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <Windows.h>
 #include <winternl.h>
-#include "PebLdrInline.h"
 #include "loader.h"
 
 
