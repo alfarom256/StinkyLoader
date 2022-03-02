@@ -18,7 +18,6 @@
 
 typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
 typedef LPVOID(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
-typedef LPVOID(WINAPI* pVirtualAlloc)(LPVOID, SIZE_T, DWORD, DWORD);
 typedef BOOL(WINAPI* pVirtualProtect)(LPVOID, SIZE_T, DWORD, PDWORD);
 typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
@@ -27,6 +26,7 @@ typedef BOOL(WINAPI* pVirtualFree)(LPVOID, SIZE_T, DWORD);
 typedef HANDLE(WINAPI* pCreateThread)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 
 // ntdll
+typedef NTSTATUS(WINAPI* pNtFreeVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG);
 typedef NTSTATUS(WINAPI* pNtAllocateVirtualMemory)(HANDLE, PVOID, ULONG_PTR, PSIZE_T, ULONG, ULONG);
 typedef VOID(WINAPI* pRtlInitAnsiString)(PANSI_STRING, PCSZ);
 typedef NTSTATUS(WINAPI* pLdrGetProcedureAddress)(HMODULE, PANSI_STRING, WORD, PVOID);
@@ -118,7 +118,6 @@ uintptr_t load(uintptr_t current_base) {
 
 
 	// kernel32 hashes
-	constexpr DWORD cdwVirtualAlloc = cexpr_adler32("VirtualAlloc");
 	constexpr DWORD cdwVirtualFree = cexpr_adler32("VirtualFree");
 	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
 	constexpr DWORD cdwGetProcAddress = cexpr_adler32("GetProcAddress");
@@ -133,7 +132,6 @@ uintptr_t load(uintptr_t current_base) {
 	pGetProcAddress stubGetProcAddress = NULL;
 	pVirtualProtect stubVirtualProtect = NULL;
 	pFlushInstructionCache stubFlushInstructionCache = NULL;
-	pVirtualAlloc stubVirtualAlloc = NULL;
 	pVirtualFree stubVirtualFree = NULL;
 	pGetNativeSystemInfo stubGetNativeSystemInfo = NULL;
 	pCreateThread stubCreateThread = NULL;
@@ -142,12 +140,14 @@ uintptr_t load(uintptr_t current_base) {
 	constexpr DWORD cdwRtlInitAnsiString = cexpr_adler32("RtlInitAnsiString");
 	constexpr DWORD cdwLdrGetProcedureAddress = cexpr_adler32("LdrGetProcedureAddress");
 	constexpr DWORD cdwNtAllocateVirtualMemory = cexpr_adler32("NtAllocateVirtualMemory");
+	constexpr DWORD cdwNtFreeVirtualMemory = cexpr_adler32("NtFreeVirtualMemory");
 #ifdef _WIN64
 	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
 #endif
 
 	//ntdll stubs
 	pNtAllocateVirtualMemory stubNtAllocateVirtualMemory = NULL;
+	pNtFreeVirtualMemory stubNtFreeVirtualMemory = NULL;
 	pRtlInitAnsiString stubRtlInitAnsiString = NULL;
 	pLdrGetProcedureAddress stubLdrGetProcedureAddress = NULL;
 #ifdef _WIN64
@@ -184,10 +184,6 @@ uintptr_t load(uintptr_t current_base) {
 	if (!stubVirtualFree)
 		return -45;
 
-	stubVirtualAlloc = (pVirtualAlloc)get_from_ldr_data(&ldrKernel32, cdwVirtualAlloc);
-	if (!stubVirtualAlloc)
-		return -46;
-
 	stubCreateThread = (pCreateThread)get_from_ldr_data(&ldrKernel32, cdwCreateThread);
 	if (!stubCreateThread)
 		return -47;
@@ -198,6 +194,9 @@ uintptr_t load(uintptr_t current_base) {
 	IMPORTING NEEDED FUNCTIONS FROM NTDLL
 	======================================================
 	*/
+	stubNtFreeVirtualMemory = (pNtFreeVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtFreeVirtualMemory);
+	if (!stubNtFreeVirtualMemory)
+		return -45;
 
 	stubNtAllocateVirtualMemory = (pNtAllocateVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtAllocateVirtualMemory);
 	if (!stubNtAllocateVirtualMemory)
@@ -301,6 +300,7 @@ uintptr_t load(uintptr_t current_base) {
 	if (((uintptr_t)new_module_base >> 32) < (((uintptr_t)new_module_base + alignedImageSize) >> 32)) {
 		// if it does, don't even bother trying again at this point
 		stubVirtualFree(new_module_base, alignedImageSize, MEM_RELEASE);
+	
 		return -11;
 	}
 
@@ -371,21 +371,27 @@ uintptr_t load(uintptr_t current_base) {
 			continue;
 		}
 
-		dest = (uintptr_t)stubVirtualAlloc(
-			(LPVOID)((uintptr_t)new_module_base + pSectionHdr->VirtualAddress),
-			pSectionHdr->SizeOfRawData,
+		szAllocationBase = ((uintptr_t)new_module_base + pSectionHdr->VirtualAddress);
+		szAllocation = pSectionHdr->SizeOfRawData;
+		status = stubNtAllocateVirtualMemory(
+			hCurrentProcess,
+			&szAllocationBase,
+			NULL,
+			&szAllocation,
 			MEM_COMMIT,
 			PAGE_READWRITE
 		);
-		if (!dest) {
+
+
+		if (!NT_SUCCESS(status)) {
 			return -13;
 		}
-		dest = (uintptr_t)new_module_base + pSectionHdr->VirtualAddress;
+
 		const void* orig_dest = (const void*)(old_base_addr + pSectionHdr->PointerToRawData);
 		// copy it over
 
 		for (ULONG i = 0; i < pSectionHdr->SizeOfRawData; i++) {
-			((PBYTE)dest)[i] = ((PBYTE)orig_dest)[i];
+			((PBYTE)szAllocationBase)[i] = ((PBYTE)orig_dest)[i];
 		}
 		pSectionHdr->Misc.PhysicalAddress = (DWORD)(dest & 0xffffffff);
 	}
