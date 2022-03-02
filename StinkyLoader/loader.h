@@ -17,8 +17,6 @@
 #define ERROR_LOADER_INIT_FAILED -2
 
 typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
-typedef LPVOID(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
-typedef BOOL(WINAPI* pVirtualProtect)(LPVOID, SIZE_T, DWORD, PDWORD);
 typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
 typedef void (WINAPI* pGetNativeSystemInfo)(LPSYSTEM_INFO);
@@ -116,24 +114,15 @@ uintptr_t load(uintptr_t current_base) {
 	PVOID nameTbl = NULL;
 	DWORD num_exp = 0;
 
-
-
 	// kernel32 hashes
 	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
-	constexpr DWORD cdwGetProcAddress = cexpr_adler32("GetProcAddress");
-	constexpr DWORD cdwVirtualProtect = cexpr_adler32("VirtualProtect");
 	constexpr DWORD cdwFlushInstructionCache = cexpr_adler32("FlushInstructionCache");
 	constexpr DWORD cdwGetNativeSystemInfo = cexpr_adler32("GetNativeSystemInfo");
-	constexpr DWORD cdwCreateThread = cexpr_adler32("CreateThread");
-
 
 	// k32 stubs
 	pLoadLibraryA stubLoadLibraryA = NULL;
-	pGetProcAddress stubGetProcAddress = NULL;
-	pVirtualProtect stubVirtualProtect = NULL;
 	pFlushInstructionCache stubFlushInstructionCache = NULL;
 	pGetNativeSystemInfo stubGetNativeSystemInfo = NULL;
-	pCreateThread stubCreateThread = NULL;
 
 	// ntdll hashes
 	constexpr DWORD cdwRtlInitAnsiString = cexpr_adler32("RtlInitAnsiString");
@@ -165,14 +154,6 @@ uintptr_t load(uintptr_t current_base) {
 	if (!stubLoadLibraryA)
 		return -40;
 
-	stubGetProcAddress = (pGetProcAddress)get_from_ldr_data(&ldrKernel32, cdwGetProcAddress);
-	if (!stubGetProcAddress)
-		return -41;
-
-	stubVirtualProtect = (pVirtualProtect)get_from_ldr_data(&ldrKernel32, cdwVirtualProtect);
-	if (!stubVirtualProtect)
-		return -42;
-
 	stubFlushInstructionCache = (pFlushInstructionCache)get_from_ldr_data(&ldrKernel32, cdwFlushInstructionCache);
 	if (!stubFlushInstructionCache)
 		return -43;
@@ -180,11 +161,6 @@ uintptr_t load(uintptr_t current_base) {
 	stubGetNativeSystemInfo = (pGetNativeSystemInfo)get_from_ldr_data(&ldrKernel32, cdwGetNativeSystemInfo);
 	if (!stubGetNativeSystemInfo)
 		return -44;
-
-	stubCreateThread = (pCreateThread)get_from_ldr_data(&ldrKernel32, cdwCreateThread);
-	if (!stubCreateThread)
-		return -47;
-
 
 	/*
 	======================================================
@@ -538,14 +514,8 @@ uintptr_t load(uintptr_t current_base) {
 				protect |= PAGE_NOCACHE;
 			}
 
-			// change memory access flags
 			PVOID lpBase = (PVOID)((uintptr_t)new_module_base + section->VirtualAddress);
 			SIZE_T ulAllocationSize = section->SizeOfRawData;
-			//stubVirtualProtect(
-			//	(LPVOID)((uintptr_t)new_module_base + section->VirtualAddress),
-			//	section->SizeOfRawData,
-			//	protect, &protect
-			//);
 			status = stubNtProtectVirtualMemory(
 				hCurrentProcess, 
 				&lpBase, 
