@@ -6,6 +6,8 @@
 
 #define MAXIMUM_HEADER_SEARCH_BYTES 0x3000
 
+#define ERROR_HDR_NOT_FOUND -1
+
 typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
 typedef LPVOID(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
 typedef LPVOID(WINAPI* pVirtualAlloc)(LPVOID, SIZE_T, DWORD, DWORD);
@@ -57,7 +59,7 @@ uintptr_t load(uintptr_t current_base) {
 	}
 	if (cbPeHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
 	{
-		return -31;
+		return ERROR_HDR_NOT_FOUND;
 	}
 
 	// begin initialize loader data
