@@ -88,7 +88,7 @@ uintptr_t load(uintptr_t current_base) {
 	}
 
 	// end initialize loader data
-
+	ANSI_STRING astrFunc = { 0 };
 	PIMAGE_SECTION_HEADER section = NULL;
 	uintptr_t address_of_entry = 0;
 	LPVOID new_module_base = NULL;
@@ -118,7 +118,6 @@ uintptr_t load(uintptr_t current_base) {
 
 
 	// kernel32 hashes
-	constexpr DWORD cdwVirtualFree = cexpr_adler32("VirtualFree");
 	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
 	constexpr DWORD cdwGetProcAddress = cexpr_adler32("GetProcAddress");
 	constexpr DWORD cdwVirtualProtect = cexpr_adler32("VirtualProtect");
@@ -132,7 +131,6 @@ uintptr_t load(uintptr_t current_base) {
 	pGetProcAddress stubGetProcAddress = NULL;
 	pVirtualProtect stubVirtualProtect = NULL;
 	pFlushInstructionCache stubFlushInstructionCache = NULL;
-	pVirtualFree stubVirtualFree = NULL;
 	pGetNativeSystemInfo stubGetNativeSystemInfo = NULL;
 	pCreateThread stubCreateThread = NULL;
 
@@ -179,10 +177,6 @@ uintptr_t load(uintptr_t current_base) {
 	stubGetNativeSystemInfo = (pGetNativeSystemInfo)get_from_ldr_data(&ldrKernel32, cdwGetNativeSystemInfo);
 	if (!stubGetNativeSystemInfo)
 		return -44;
-
-	stubVirtualFree = (pVirtualFree)get_from_ldr_data(&ldrKernel32, cdwVirtualFree);
-	if (!stubVirtualFree)
-		return -45;
 
 	stubCreateThread = (pCreateThread)get_from_ldr_data(&ldrKernel32, cdwCreateThread);
 	if (!stubCreateThread)
@@ -299,8 +293,7 @@ uintptr_t load(uintptr_t current_base) {
 
 	if (((uintptr_t)new_module_base >> 32) < (((uintptr_t)new_module_base + alignedImageSize) >> 32)) {
 		// if it does, don't even bother trying again at this point
-		stubVirtualFree(new_module_base, alignedImageSize, MEM_RELEASE);
-	
+		status = stubNtFreeVirtualMemory(hCurrentProcess, &new_module_base, &alignedImageSize, MEM_RELEASE);
 		return -11;
 	}
 
@@ -452,7 +445,12 @@ uintptr_t load(uintptr_t current_base) {
 				}
 				else {
 					PIMAGE_IMPORT_BY_NAME pFname = (PIMAGE_IMPORT_BY_NAME)((uintptr_t)new_module_base + pOriginalThunk->u1.AddressOfData);
-					pImgThunk->u1.Function = (ULONGLONG)stubGetProcAddress(loadedModule, pFname->Name);
+					stubRtlInitAnsiString(&astrFunc, pFname->Name);
+					status = stubLdrGetProcedureAddress(loadedModule, &astrFunc, NULL, &(pImgThunk->u1.Function));
+					if (!NT_SUCCESS(status)) {
+						return -999;
+					}
+					//pImgThunk->u1.Function = (ULONGLONG)stubGetProcAddress(loadedModule, pFname->Name);
 				}
 
 				pOriginalThunk++;
