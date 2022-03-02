@@ -288,7 +288,6 @@ uintptr_t load(uintptr_t current_base) {
 
 	// 4.1 commit memory for the headers
 	// https://github.com/fancycode/MemoryModule/blob/master/MemoryModule.c#L697
-	//LPVOID lpNewHeaderAddr = stubVirtualAlloc(new_module_base, _old_nt_hdr->OptionalHeader.SizeOfHeaders, MEM_COMMIT, PAGE_READWRITE);
 
 	szAllocation = _old_nt_hdr->OptionalHeader.SizeOfHeaders;
 	status = stubNtAllocateVirtualMemory(
@@ -568,6 +567,11 @@ uintptr_t load(uintptr_t current_base) {
 
 	uintptr_t entrypoint = _new_nt_hdr->OptionalHeader.AddressOfEntryPoint + (uintptr_t)new_module_base;
 	pDllMain stubDllMain = (pDllMain)(entrypoint);
+	
+	// zero DOS and NT headers
+	__stosb((unsigned char*)_new_dos_hdr, 0, sizeof(IMAGE_DOS_HEADER));
+	__stosb((unsigned char*)_new_nt_hdr, 0, sizeof(IMAGE_NT_HEADERS));
+
 	stubDllMain((HINSTANCE)new_module_base, DLL_PROCESS_ATTACH, NULL);
 	return (uintptr_t)new_module_base;
 }
