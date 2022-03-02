@@ -114,6 +114,11 @@ BOOL do_rload(char* dll) {
     VirtualProtect(lpBuf, size, PAGE_READWRITE, &old);
     uintptr_t lpNewBase = load((uintptr_t)lpBuf);
 
+    if ((lpNewBase & 0xFF00000000000000) > 0) {
+        printf("Failed with status %p\n", lpNewBase);
+        return FALSE;
+    }
+
     return lpNewBase != 0;
 }
 

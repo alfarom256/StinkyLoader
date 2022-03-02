@@ -26,7 +26,7 @@ typedef BOOL(WINAPI* pVirtualFree)(LPVOID, SIZE_T, DWORD);
 typedef HANDLE(WINAPI* pCreateThread)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 
 // ntdll
-typedef NTSTATUS(WINAPI* pNtProtectVirtualMemory)(HANDLE, PVOID*, PULONG, ULONG, PULONG);
+typedef NTSTATUS(WINAPI* pNtProtectVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
 typedef NTSTATUS(WINAPI* pNtFreeVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG);
 typedef NTSTATUS(WINAPI* pNtAllocateVirtualMemory)(HANDLE, PVOID, ULONG_PTR, PSIZE_T, ULONG, ULONG);
 typedef VOID(WINAPI* pRtlInitAnsiString)(PANSI_STRING, PCSZ);
@@ -539,11 +539,23 @@ uintptr_t load(uintptr_t current_base) {
 			}
 
 			// change memory access flags
-			stubVirtualProtect(
-				(LPVOID)((uintptr_t)new_module_base + section->VirtualAddress),
-				section->SizeOfRawData,
-				protect, &protect
+			PVOID lpBase = (PVOID)((uintptr_t)new_module_base + section->VirtualAddress);
+			SIZE_T ulAllocationSize = section->SizeOfRawData;
+			//stubVirtualProtect(
+			//	(LPVOID)((uintptr_t)new_module_base + section->VirtualAddress),
+			//	section->SizeOfRawData,
+			//	protect, &protect
+			//);
+			status = stubNtProtectVirtualMemory(
+				hCurrentProcess, 
+				&lpBase, 
+				&ulAllocationSize, 
+				protect, 
+				&protect
 			);
+			if (!NT_SUCCESS(status)) {
+				return status;
+			}
 		}
 
 	}
