@@ -26,6 +26,7 @@ typedef BOOL(WINAPI* pVirtualFree)(LPVOID, SIZE_T, DWORD);
 typedef HANDLE(WINAPI* pCreateThread)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 
 // ntdll
+typedef NTSTATUS(WINAPI* pNtProtectVirtualMemory)(HANDLE, PVOID*, PULONG, ULONG, PULONG);
 typedef NTSTATUS(WINAPI* pNtFreeVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG);
 typedef NTSTATUS(WINAPI* pNtAllocateVirtualMemory)(HANDLE, PVOID, ULONG_PTR, PSIZE_T, ULONG, ULONG);
 typedef VOID(WINAPI* pRtlInitAnsiString)(PANSI_STRING, PCSZ);
@@ -139,11 +140,13 @@ uintptr_t load(uintptr_t current_base) {
 	constexpr DWORD cdwLdrGetProcedureAddress = cexpr_adler32("LdrGetProcedureAddress");
 	constexpr DWORD cdwNtAllocateVirtualMemory = cexpr_adler32("NtAllocateVirtualMemory");
 	constexpr DWORD cdwNtFreeVirtualMemory = cexpr_adler32("NtFreeVirtualMemory");
+	constexpr DWORD cdwNtProtectVirtualMemory = cexpr_adler32("NtProtectVirtualMemory");
 #ifdef _WIN64
 	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
 #endif
 
 	//ntdll stubs
+	pNtProtectVirtualMemory stubNtProtectVirtualMemory = NULL;
 	pNtAllocateVirtualMemory stubNtAllocateVirtualMemory = NULL;
 	pNtFreeVirtualMemory stubNtFreeVirtualMemory = NULL;
 	pRtlInitAnsiString stubRtlInitAnsiString = NULL;
@@ -188,6 +191,10 @@ uintptr_t load(uintptr_t current_base) {
 	IMPORTING NEEDED FUNCTIONS FROM NTDLL
 	======================================================
 	*/
+	stubNtProtectVirtualMemory = (pNtProtectVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtProtectVirtualMemory);
+	if (!stubNtProtectVirtualMemory)
+		return -42;
+
 	stubNtFreeVirtualMemory = (pNtFreeVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtFreeVirtualMemory);
 	if (!stubNtFreeVirtualMemory)
 		return -45;
@@ -450,7 +457,6 @@ uintptr_t load(uintptr_t current_base) {
 					if (!NT_SUCCESS(status)) {
 						return -999;
 					}
-					//pImgThunk->u1.Function = (ULONGLONG)stubGetProcAddress(loadedModule, pFname->Name);
 				}
 
 				pOriginalThunk++;
@@ -474,13 +480,17 @@ uintptr_t load(uintptr_t current_base) {
 					stubLdrGetProcedureAddress(hDelayLib, NULL, (WORD)pImgThunk->u1.Ordinal, &pImgThunk->u1.Function);
 				}
 				else {
-					PANSI_STRING pAstrDelayFunctionName = NULL;
-					stubRtlInitAnsiString(pAstrDelayFunctionName, (const char*)(pImgThunk->u1.AddressOfData + hDelayLib));
-					stubLdrGetProcedureAddress(hDelayLib, pAstrDelayFunctionName, NULL, &pImgThunk->u1.Function);
+					stubRtlInitAnsiString(&astrFunc, (const char*)(pImgThunk->u1.AddressOfData + hDelayLib));
+					stubLdrGetProcedureAddress(hDelayLib, &astrFunc, NULL, &pImgThunk->u1.Function);
 				}
 				PIMAGE_IMPORT_BY_NAME pFname = (PIMAGE_IMPORT_BY_NAME)((uintptr_t)new_module_base + pOriginalThunk->u1.AddressOfData);
 				DWORD oldProtect = 0;
-				pImgThunk->u1.Function = (ULONGLONG)stubGetProcAddress(hDelayLib, pFname->Name);
+				stubRtlInitAnsiString(&astrFunc, pFname->Name);
+				//pImgThunk->u1.Function = (ULONGLONG)stubGetProcAddress(hDelayLib, pFname->Name);
+				status = stubLdrGetProcedureAddress(hDelayLib, &astrFunc, NULL, &(pImgThunk->u1.Function));
+				if (!status) {
+					return -999;
+				}
 				pOriginalThunk++;
 				pImgThunk++;
 			}
