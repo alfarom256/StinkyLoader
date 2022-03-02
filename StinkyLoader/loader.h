@@ -1,3 +1,10 @@
+/*
+	TODOS:
+		1. Check allocations with NtAllocateVirtualMemory, ensure size allocated >= size required
+		2. Remove duplicate vars
+*/
+
+
 #pragma once
 #include <Windows.h>
 #include <winnt.h>
@@ -7,22 +14,25 @@
 #define MAXIMUM_HEADER_SEARCH_BYTES 0x3000
 
 #define ERROR_HDR_NOT_FOUND -1
+#define ERROR_LOADER_INIT_FAILED -2
 
 typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
 typedef LPVOID(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
 typedef LPVOID(WINAPI* pVirtualAlloc)(LPVOID, SIZE_T, DWORD, DWORD);
 typedef BOOL(WINAPI* pVirtualProtect)(LPVOID, SIZE_T, DWORD, PDWORD);
 typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
-typedef NTSTATUS(WINAPI* pLdrGetProcedureAddress)(HMODULE, PANSI_STRING, WORD, PVOID);
-typedef VOID(WINAPI* pRtlInitAnsiString)(PANSI_STRING, PCSZ);
-#ifdef _WIN64
-typedef BOOL(WINAPI* pRtlAddFunctionTable)(PRUNTIME_FUNCTION, DWORD, DWORD64);
-#endif
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
 typedef void (WINAPI* pGetNativeSystemInfo)(LPSYSTEM_INFO);
 typedef BOOL(WINAPI* pVirtualFree)(LPVOID, SIZE_T, DWORD);
 typedef HANDLE(WINAPI* pCreateThread)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 
+// ntdll
+typedef NTSTATUS(WINAPI* pNtAllocateVirtualMemory)(HANDLE, PVOID, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+typedef VOID(WINAPI* pRtlInitAnsiString)(PANSI_STRING, PCSZ);
+typedef NTSTATUS(WINAPI* pLdrGetProcedureAddress)(HMODULE, PANSI_STRING, WORD, PVOID);
+#ifdef _WIN64
+typedef BOOL(WINAPI* pRtlAddFunctionTable)(PRUNTIME_FUNCTION, DWORD, DWORD64);
+#endif
 
 // https://github.com/fancycode/MemoryModule/blob/master/MemoryModule.c#L123
 static __forceinline size_t
@@ -70,11 +80,11 @@ uintptr_t load(uintptr_t current_base) {
 	LDR_DATA ldrNtdll = { 0 };
 
 	if (!init_ldr_data(&ldrKernel32, (HMODULE)k32base)) {
-		return -1;
+		return ERROR_LOADER_INIT_FAILED;
 	}
 
 	if (!init_ldr_data(&ldrNtdll, (HMODULE)ntbase)) {
-		return -1;
+		return ERROR_LOADER_INIT_FAILED;
 	}
 
 	// end initialize loader data
@@ -83,40 +93,11 @@ uintptr_t load(uintptr_t current_base) {
 	uintptr_t address_of_entry = 0;
 	LPVOID new_module_base = NULL;
 	uintptr_t baseOffset = 0;
-
-
-	// kernel32
-	constexpr DWORD cdwVirtualAlloc = cexpr_adler32("VirtualAlloc");
-	constexpr DWORD cdwVirtualFree = cexpr_adler32("VirtualFree");
-	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
-	constexpr DWORD cdwGetProcAddress = cexpr_adler32("GetProcAddress");
-	constexpr DWORD cdwVirtualProtect = cexpr_adler32("VirtualProtect");
-	constexpr DWORD cdwFlushInstructionCache = cexpr_adler32("FlushInstructionCache");
-	constexpr DWORD cdwGetNativeSystemInfo = cexpr_adler32("GetNativeSystemInfo");
-	constexpr DWORD cdwCreateThread = cexpr_adler32("CreateThread");
-
-	// ntdll
-	constexpr DWORD cdwRtlInitAnsiString = cexpr_adler32("RtlInitAnsiString");
-	constexpr DWORD cdwLdrGetProcedureAddress = cexpr_adler32("LdrGetProcedureAddress");
-
-#ifdef _WIN64
-	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
-	pRtlAddFunctionTable stubRtlAddFunctionTable = NULL;
-#endif
-
-	pLoadLibraryA stubLoadLibraryA = NULL;
-	pGetProcAddress stubGetProcAddress = NULL;
-	pVirtualProtect stubVirtualProtect = NULL;
-	pFlushInstructionCache stubFlushInstructionCache = NULL;
-	pRtlInitAnsiString stubRtlInitAnsiString = NULL;
-	pLdrGetProcedureAddress stubLdrGetProcedureAddress = NULL;
-	pVirtualAlloc stubVirtualAlloc = NULL;
-	pVirtualFree stubVirtualFree = NULL;
-	pGetNativeSystemInfo stubGetNativeSystemInfo = NULL;
-	pCreateThread stubCreateThread = NULL;
-
 	SYSTEM_INFO SystemInfo = { 0 };
-
+	SIZE_T szAllocation = 0;
+	SIZE_T szAllocationBase = 0;
+	NTSTATUS status = 0;
+	HANDLE hCurrentProcess = (HANDLE)-1;
 	IMAGE_DATA_DIRECTORY dataDir;
 
 	PPEB ppeb = NULL;
@@ -135,6 +116,44 @@ uintptr_t load(uintptr_t current_base) {
 	DWORD num_exp = 0;
 
 
+
+	// kernel32 hashes
+	constexpr DWORD cdwVirtualAlloc = cexpr_adler32("VirtualAlloc");
+	constexpr DWORD cdwVirtualFree = cexpr_adler32("VirtualFree");
+	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
+	constexpr DWORD cdwGetProcAddress = cexpr_adler32("GetProcAddress");
+	constexpr DWORD cdwVirtualProtect = cexpr_adler32("VirtualProtect");
+	constexpr DWORD cdwFlushInstructionCache = cexpr_adler32("FlushInstructionCache");
+	constexpr DWORD cdwGetNativeSystemInfo = cexpr_adler32("GetNativeSystemInfo");
+	constexpr DWORD cdwCreateThread = cexpr_adler32("CreateThread");
+
+
+	// k32 stubs
+	pLoadLibraryA stubLoadLibraryA = NULL;
+	pGetProcAddress stubGetProcAddress = NULL;
+	pVirtualProtect stubVirtualProtect = NULL;
+	pFlushInstructionCache stubFlushInstructionCache = NULL;
+	pVirtualAlloc stubVirtualAlloc = NULL;
+	pVirtualFree stubVirtualFree = NULL;
+	pGetNativeSystemInfo stubGetNativeSystemInfo = NULL;
+	pCreateThread stubCreateThread = NULL;
+
+	// ntdll hashes
+	constexpr DWORD cdwRtlInitAnsiString = cexpr_adler32("RtlInitAnsiString");
+	constexpr DWORD cdwLdrGetProcedureAddress = cexpr_adler32("LdrGetProcedureAddress");
+	constexpr DWORD cdwNtAllocateVirtualMemory = cexpr_adler32("NtAllocateVirtualMemory");
+#ifdef _WIN64
+	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
+#endif
+
+	//ntdll stubs
+	pNtAllocateVirtualMemory stubNtAllocateVirtualMemory = NULL;
+	pRtlInitAnsiString stubRtlInitAnsiString = NULL;
+	pLdrGetProcedureAddress stubLdrGetProcedureAddress = NULL;
+#ifdef _WIN64
+	pRtlAddFunctionTable stubRtlAddFunctionTable = NULL;
+#endif
+
 	/*
 	======================================================
 	IMPORTING NEEDED FUNCTIONS FROM K32
@@ -144,31 +163,31 @@ uintptr_t load(uintptr_t current_base) {
 	stubLoadLibraryA = (pLoadLibraryA)get_from_ldr_data(&ldrKernel32, cdwLoadLibraryA);
 	if (!stubLoadLibraryA)
 		return -40;
-	
+
 	stubGetProcAddress = (pGetProcAddress)get_from_ldr_data(&ldrKernel32, cdwGetProcAddress);
 	if (!stubGetProcAddress)
 		return -41;
-	
+
 	stubVirtualProtect = (pVirtualProtect)get_from_ldr_data(&ldrKernel32, cdwVirtualProtect);
 	if (!stubVirtualProtect)
 		return -42;
-	
+
 	stubFlushInstructionCache = (pFlushInstructionCache)get_from_ldr_data(&ldrKernel32, cdwFlushInstructionCache);
 	if (!stubFlushInstructionCache)
 		return -43;
-	
+
 	stubGetNativeSystemInfo = (pGetNativeSystemInfo)get_from_ldr_data(&ldrKernel32, cdwGetNativeSystemInfo);
 	if (!stubGetNativeSystemInfo)
 		return -44;
-	
+
 	stubVirtualFree = (pVirtualFree)get_from_ldr_data(&ldrKernel32, cdwVirtualFree);
 	if (!stubVirtualFree)
 		return -45;
-	
+
 	stubVirtualAlloc = (pVirtualAlloc)get_from_ldr_data(&ldrKernel32, cdwVirtualAlloc);
 	if (!stubVirtualAlloc)
 		return -46;
-	
+
 	stubCreateThread = (pCreateThread)get_from_ldr_data(&ldrKernel32, cdwCreateThread);
 	if (!stubCreateThread)
 		return -47;
@@ -180,12 +199,18 @@ uintptr_t load(uintptr_t current_base) {
 	======================================================
 	*/
 
+	stubNtAllocateVirtualMemory = (pNtAllocateVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtAllocateVirtualMemory);
+	if (!stubNtAllocateVirtualMemory)
+		return -46;
+
 	stubRtlInitAnsiString = (pRtlInitAnsiString)get_from_ldr_data(&ldrNtdll, cdwRtlInitAnsiString);
 	if (!stubRtlInitAnsiString)
 		return -48;
+
 	stubLdrGetProcedureAddress = (pLdrGetProcedureAddress)get_from_ldr_data(&ldrNtdll, cdwLdrGetProcedureAddress);
 	if (!stubLdrGetProcedureAddress)
 		return -49;
+
 #ifdef _WIN64
 	stubRtlAddFunctionTable = (pRtlAddFunctionTable)get_from_ldr_data(&ldrNtdll, cdwRtlAddFunctionTable);
 	if (!stubRtlAddFunctionTable)
@@ -238,23 +263,29 @@ uintptr_t load(uintptr_t current_base) {
 	/* ================================================================================
 	* 2. Allocate memory for the DLL with VirtualAlloc with it's preferred base address
 	=================================================================================*/
+	new_module_base = (PVOID)_old_nt_hdr->OptionalHeader.ImageBase;
+	szAllocation = alignedImageSize;
 
-	DWORD _gle = 0;
-	new_module_base = stubVirtualAlloc(
-		(LPVOID)_old_nt_hdr->OptionalHeader.ImageBase,
-		alignedImageSize,
+	status = stubNtAllocateVirtualMemory(
+		hCurrentProcess,
+		&new_module_base,
+		NULL,
+		&szAllocation,
 		MEM_RESERVE | MEM_COMMIT,
 		PAGE_READWRITE
 	);
 
-	if (!new_module_base) {
-		new_module_base = stubVirtualAlloc(
+	if (!NT_SUCCESS(status)) {
+		new_module_base = 0;
+		status = stubNtAllocateVirtualMemory(
+			hCurrentProcess,
+			&new_module_base,
 			NULL,
-			alignedImageSize,
+			&szAllocation,
 			MEM_RESERVE | MEM_COMMIT,
 			PAGE_READWRITE
 		);
-		if (!new_module_base) {
+		if (!NT_SUCCESS(status)) {
 			return -10;
 		}
 	}
@@ -281,18 +312,28 @@ uintptr_t load(uintptr_t current_base) {
 
 	// 4.1 commit memory for the headers
 	// https://github.com/fancycode/MemoryModule/blob/master/MemoryModule.c#L697
-	LPVOID lpNewHeaderAddr = stubVirtualAlloc(new_module_base, _old_nt_hdr->OptionalHeader.SizeOfHeaders, MEM_COMMIT, PAGE_READWRITE);
+	//LPVOID lpNewHeaderAddr = stubVirtualAlloc(new_module_base, _old_nt_hdr->OptionalHeader.SizeOfHeaders, MEM_COMMIT, PAGE_READWRITE);
+
+	szAllocation = _old_nt_hdr->OptionalHeader.SizeOfHeaders;
+	status = stubNtAllocateVirtualMemory(
+		hCurrentProcess,
+		&new_module_base,
+		NULL,
+		&szAllocation,
+		MEM_COMMIT,
+		PAGE_READWRITE
+	);
 
 	// copy dos header
 	for (size_t i = 0; i < _old_nt_hdr->OptionalHeader.SizeOfHeaders; i++) {
-		((unsigned char*)lpNewHeaderAddr)[i] = ((unsigned char*)_old_dos_hdr)[i];
+		((unsigned char*)new_module_base)[i] = ((unsigned char*)_old_dos_hdr)[i];
 	}
 
 	/* ================================================================
 	* 5. Update the OptionalHeader.ImageBase to be the allocated buffer
 	================================================================ */
-	_new_dos_hdr = (IMAGE_DOS_HEADER*)lpNewHeaderAddr;
-	_new_nt_hdr = (IMAGE_NT_HEADERS*)((uintptr_t)lpNewHeaderAddr + _new_dos_hdr->e_lfanew);
+	_new_dos_hdr = (IMAGE_DOS_HEADER*)new_module_base;
+	_new_nt_hdr = (IMAGE_NT_HEADERS*)((uintptr_t)new_module_base + _new_dos_hdr->e_lfanew);
 	_new_nt_hdr->OptionalHeader.ImageBase = (ULONGLONG)new_module_base;
 
 
@@ -304,15 +345,21 @@ uintptr_t load(uintptr_t current_base) {
 	uintptr_t dest = 0;
 	for (size_t i = 0; i < _new_nt_hdr->FileHeader.NumberOfSections; i++, pSectionHdr++) {
 		if (pSectionHdr->SizeOfRawData == 0) {
-			size_t section_size = _old_nt_hdr->OptionalHeader.SectionAlignment;
+			size_t section_size = _old_nt_hdr->OptionalHeader.SectionAlignment; // opt
+			
+			szAllocation = section_size;
+			szAllocationBase = ((uintptr_t)new_module_base + pSectionHdr->VirtualAddress);
+			
 			if (section_size) {
-				dest = (uintptr_t)stubVirtualAlloc(
-					(LPVOID)((uintptr_t)new_module_base + pSectionHdr->VirtualAddress),
-					section_size,
+				status = stubNtAllocateVirtualMemory(
+					hCurrentProcess,
+					&szAllocationBase,
+					NULL,
+					&szAllocation,
 					MEM_COMMIT,
 					PAGE_READWRITE
 				);
-				if (!dest) {
+				if (!NT_SUCCESS(status)) {
 					return -12;
 				}
 				dest = (uintptr_t)new_module_base + pSectionHdr->VirtualAddress;
@@ -487,7 +534,7 @@ uintptr_t load(uintptr_t current_base) {
 
 	}
 
-	stubFlushInstructionCache((HANDLE)-1, NULL, 0);
+	stubFlushInstructionCache(hCurrentProcess, NULL, 0);
 	/*
 	======================================================
 	EXCEPTION PROCESSING
@@ -497,7 +544,7 @@ uintptr_t load(uintptr_t current_base) {
 	// https://github.com/monoxgas/sRDI/blob/master/ShellcodeRDI/ShellcodeRDI.c#L530 
 	// forgot to make sure the size AND data exist
 	dataDir = _new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-	
+
 	if (dataDir.Size && stubRtlAddFunctionTable) {
 		//https://reactos.org/wiki/Techwiki:SEH64
 		PIMAGE_RUNTIME_FUNCTION_ENTRY pData = (PIMAGE_RUNTIME_FUNCTION_ENTRY)(_new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION].VirtualAddress + (uintptr_t)new_module_base);
