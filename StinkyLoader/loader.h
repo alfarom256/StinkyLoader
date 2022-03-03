@@ -20,11 +20,11 @@
 #define ERROR_HDR_NOT_FOUND -1
 #define ERROR_LOADER_INIT_FAILED -2
 
-typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
 typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
 
 // ntdll
+typedef VOID(WINAPI* pRtlFreeUnicodeString)(PUNICODE_STRING);
 typedef NTSTATUS(WINAPI* pLdrLoadDll)(PWCHAR, ULONG, PUNICODE_STRING, PHANDLE);
 typedef NTSTATUS(WINAPI* pRtlAnsiStringToUnicodeString)(PUNICODE_STRING, PCANSI_STRING, BOOLEAN);
 typedef NTSTATUS(WINAPI* pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
@@ -121,11 +121,9 @@ uintptr_t load(uintptr_t current_base) {
 	DWORD num_exp = 0;
 
 	// kernel32 hashes
-	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
 	constexpr DWORD cdwFlushInstructionCache = cexpr_adler32("FlushInstructionCache");
 
 	// k32 stubs
-	pLoadLibraryA stubLoadLibraryA = NULL;
 	pFlushInstructionCache stubFlushInstructionCache = NULL;
 
 	// ntdll hashes
@@ -138,6 +136,7 @@ uintptr_t load(uintptr_t current_base) {
 	constexpr DWORD cdwLdrGetDllHandleByName = cexpr_adler32("LdrGetDllHandleByName");
 	constexpr DWORD cdwLdrLoadDll = cexpr_adler32("LdrLoadDll");
 	constexpr DWORD cdwRtlAnsiStringToUnicodeString = cexpr_adler32("RtlAnsiStringToUnicodeString");
+	constexpr DWORD cdwRtlFreeUnicodeString = cexpr_adler32("RtlFreeUnicodeString");
 #ifdef _WIN64
 	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
 #endif
@@ -152,6 +151,7 @@ uintptr_t load(uintptr_t current_base) {
 	pRtlInitAnsiString stubRtlInitAnsiString = NULL;
 	pLdrGetProcedureAddress stubLdrGetProcedureAddress = NULL;
 	pRtlAnsiStringToUnicodeString stubRtlAnsiStringToUnicodeString = NULL;
+	pRtlFreeUnicodeString stubRtlFreeUnicodeString = NULL;
 #ifdef _WIN64
 	pRtlAddFunctionTable stubRtlAddFunctionTable = NULL;
 #endif
@@ -162,9 +162,6 @@ uintptr_t load(uintptr_t current_base) {
 	======================================================
 	*/
 
-	stubLoadLibraryA = (pLoadLibraryA)get_from_ldr_data(&ldrKernel32, cdwLoadLibraryA);
-	if (!stubLoadLibraryA)
-		return -40;
 
 	stubFlushInstructionCache = (pFlushInstructionCache)get_from_ldr_data(&ldrKernel32, cdwFlushInstructionCache);
 	if (!stubFlushInstructionCache)
@@ -218,6 +215,10 @@ uintptr_t load(uintptr_t current_base) {
 	stubRtlAnsiStringToUnicodeString = (pRtlAnsiStringToUnicodeString)get_from_ldr_data(&ldrNtdll, cdwRtlAnsiStringToUnicodeString);
 	if (!stubRtlAnsiStringToUnicodeString)
 		return -53;
+
+	stubRtlFreeUnicodeString = (pRtlFreeUnicodeString)get_from_ldr_data(&ldrNtdll, cdwRtlFreeUnicodeString);
+	if (!stubRtlFreeUnicodeString)
+		return -54;
 
 
 	/* =================================================================================
@@ -459,20 +460,6 @@ uintptr_t load(uintptr_t current_base) {
 	/* =============
 	* 8. Process IAT
 	============= */
-	// allocate some memory to hold the buffer for the UNICODE_STRING required by LdrLoadDll
-
-	/*
-		status = stubNtAllocateVirtualMemory(
-			hCurrentProcess,
-			&new_module_base,
-			NULL,
-			&szAllocation,
-			MEM_COMMIT,
-			PAGE_READWRITE
-		);
-	*/
-
-
 	if (!NT_SUCCESS(status))
 		return -42069;
 
@@ -496,18 +483,16 @@ uintptr_t load(uintptr_t current_base) {
 			}
 
 			if(!loadedModule) {
-				astrFunc.Buffer = (PCHAR)importName;
-				astrFunc.Length = (USHORT)strlen(importName);
-				astrFunc.MaximumLength = astrFunc.Length + 1;
+				stubRtlInitAnsiString(&astrFunc, (PCSZ)importName);
 				stubRtlAnsiStringToUnicodeString(&UnicodeString, &astrFunc, TRUE);
 				status = stubLdrLoadDll(NULL, NULL, &UnicodeString, (PHANDLE)&loadedModule);
+				stubRtlFreeUnicodeString(&UnicodeString);
 				if (!NT_SUCCESS(status)) {
 #ifdef _LOADER_DEBUG
 					printf("LdrLoadDll Failed - 0x%x\n", status);
 #endif
+					return status;
 				}
-				if (!loadedModule)
-					return -420690;
 
 			}
 
@@ -550,7 +535,17 @@ uintptr_t load(uintptr_t current_base) {
 		PIMAGE_DELAYLOAD_DESCRIPTOR _delayload = (PIMAGE_DELAYLOAD_DESCRIPTOR)(_new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress + (uintptr_t)new_module_base);
 		while (_delayload->DllNameRVA) {
 			const char* strDelayLib = (const char*)((uintptr_t)new_module_base + _delayload->DllNameRVA);
-			HMODULE hDelayLib = stubLoadLibraryA(strDelayLib);
+			HMODULE hDelayLib = NULL;
+			stubRtlInitAnsiString(&astrFunc, (PCSZ)strDelayLib);
+			stubRtlAnsiStringToUnicodeString(&UnicodeString, &astrFunc, TRUE);
+			status = stubLdrLoadDll(NULL, NULL, &UnicodeString, (PHANDLE)&hDelayLib);
+			stubRtlFreeUnicodeString(&UnicodeString);
+			if (!NT_SUCCESS(status)) {
+#ifdef _LOADER_DEBUG
+				printf("Delayed Imports LdrLoadDll Failed - 0x%x\n", status);
+#endif
+				return status;
+			}
 			PIMAGE_THUNK_DATA pImgThunk = (PIMAGE_THUNK_DATA)(_import->FirstThunk + (uintptr_t)new_module_base);
 			PIMAGE_THUNK_DATA pOriginalThunk = (PIMAGE_THUNK_DATA)(_import->OriginalFirstThunk + (uintptr_t)new_module_base);
 			while (pImgThunk->u1.Function != NULL) {
