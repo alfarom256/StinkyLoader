@@ -11,6 +11,10 @@
 #include <winternl.h>
 #include "PebLdrInline.h"
 
+#ifdef _LOADER_DEBUG
+#include <stdio.h>
+#endif
+
 #define MAXIMUM_HEADER_SEARCH_BYTES 0x3000
 
 #define ERROR_HDR_NOT_FOUND -1
@@ -87,6 +91,9 @@ uintptr_t load(uintptr_t current_base) {
 
 	// end initialize loader data
 	ANSI_STRING astrFunc = { 0 };
+	SYSTEM_BASIC_INFORMATION sbi = { 0 };
+	pcall_rel32 pc32 = { 0 };
+	plea_rel32 pl32 = { 0 };
 	PIMAGE_SECTION_HEADER section = NULL;
 	uintptr_t address_of_entry = 0;
 	LPVOID new_module_base = NULL;
@@ -96,9 +103,9 @@ uintptr_t load(uintptr_t current_base) {
 	NTSTATUS status = 0;
 	HANDLE hCurrentProcess = (HANDLE)-1;
 	IMAGE_DATA_DIRECTORY dataDir;
-
+	PVOID pPattern = 0;
 	PPEB ppeb = NULL;
-
+	PLIST_ENTRY pLdrpHashTable = 0;
 	IMAGE_DOS_HEADER* _old_dos_hdr = NULL;
 	IMAGE_NT_HEADERS* _old_nt_hdr = NULL;
 	IMAGE_EXPORT_DIRECTORY* _old_export_dir = NULL;
@@ -106,7 +113,6 @@ uintptr_t load(uintptr_t current_base) {
 	IMAGE_DOS_HEADER* _new_dos_hdr = NULL;
 	IMAGE_NT_HEADERS* _new_nt_hdr = NULL;
 	IMAGE_EXPORT_DIRECTORY* _new_export_dir = NULL;
-	SYSTEM_BASIC_INFORMATION sbi = { 0 };
 	PDWORD funcTbl = NULL;
 	PWORD ordTbl = NULL;
 	PVOID nameTbl = NULL;
@@ -127,11 +133,13 @@ uintptr_t load(uintptr_t current_base) {
 	constexpr DWORD cdwNtAllocateVirtualMemory = cexpr_adler32("NtAllocateVirtualMemory");
 	constexpr DWORD cdwNtFreeVirtualMemory = cexpr_adler32("NtFreeVirtualMemory");
 	constexpr DWORD cdwNtProtectVirtualMemory = cexpr_adler32("NtProtectVirtualMemory");
+	constexpr DWORD cdwLdrGetDllHandleByName = cexpr_adler32("LdrGetDllHandleByName");
 #ifdef _WIN64
 	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
 #endif
 
 	//ntdll stubs
+	PVOID pLdrGetDllHandleByName = NULL;
 	pNtQuerySystemInformation stubNtQuerySystemInformation = NULL;
 	pNtProtectVirtualMemory stubNtProtectVirtualMemory = NULL;
 	pNtAllocateVirtualMemory stubNtAllocateVirtualMemory = NULL;
@@ -161,13 +169,15 @@ uintptr_t load(uintptr_t current_base) {
 	IMPORTING NEEDED FUNCTIONS FROM NTDLL
 	======================================================
 	*/
-	stubNtQuerySystemInformation = (pNtQuerySystemInformation)get_from_ldr_data(&ldrNtdll, cdwNtQuerySystemInformation);
-	if (!stubNtQuerySystemInformation)
-		return -44;
 
+	
 	stubNtProtectVirtualMemory = (pNtProtectVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtProtectVirtualMemory);
 	if (!stubNtProtectVirtualMemory)
 		return -42;
+	
+	stubNtQuerySystemInformation = (pNtQuerySystemInformation)get_from_ldr_data(&ldrNtdll, cdwNtQuerySystemInformation);
+	if (!stubNtQuerySystemInformation)
+		return -44;
 
 	stubNtFreeVirtualMemory = (pNtFreeVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtFreeVirtualMemory);
 	if (!stubNtFreeVirtualMemory)
@@ -191,6 +201,28 @@ uintptr_t load(uintptr_t current_base) {
 		return -50;
 #endif
 
+	pLdrGetDllHandleByName = get_from_ldr_data(&ldrNtdll, cdwLdrGetDllHandleByName);
+	if (!pLdrGetDllHandleByName)
+		return -51;
+
+
+	/* =================================================================================
+	*  Set up everything needed for the LdrpHashTable searching
+	================================================================================= */
+	pPattern = findPattern(pLdrGetDllHandleByName, prelude1, sizeof(prelude1));
+	if (pPattern) {
+		pc32 = (pcall_rel32)((PBYTE)pPattern + sizeof(prelude1));
+		PBYTE pLdrpFindLoadedDllByName = (PBYTE)pPattern + sizeof(prelude1) + pc32->offset + sizeof(call_rel32);
+		pPattern = findPattern(pLdrpFindLoadedDllByName, prelude2, sizeof(prelude2));
+		if (pPattern) {
+			pcall_rel32 pcall_LdrpFindLoadedDllByNameLockHeld = (pcall_rel32)((PBYTE)pPattern + sizeof(prelude2));
+			PVOID pLdrpFindLoadedDllByNameLockHeld = (PBYTE)pPattern + sizeof(prelude2) + pcall_LdrpFindLoadedDllByNameLockHeld->offset + sizeof(call_rel32);
+			// now find the hash table
+			pPattern = findPattern(pLdrpFindLoadedDllByNameLockHeld, prelude3, sizeof(prelude3));
+			plea_rel32 plea_LdrpHashTable = (plea_rel32)((PBYTE)pPattern + sizeof(prelude3));
+			pLdrpHashTable = (PLIST_ENTRY)((PBYTE)pPattern + sizeof(prelude3) + plea_LdrpHashTable->offset + sizeof(lea_rel32));
+		}
+	}
 
 	/* ====================================================================================================================================================
 	* 1. Ensure the aligned image size (using OptionalHeader aligned to sys) is equal to the calculated last section's end aligned to the system alignment.
@@ -231,7 +263,7 @@ uintptr_t load(uintptr_t current_base) {
 	ULONG ulBytesRead = 0;
 	DWORD dwPageSize = 0;
 
-	status = stubNtQuerySystemInformation(SystemBasicInformation, &sbi, sizeof(ULONG), &ulBytesRead);
+	status = stubNtQuerySystemInformation(SystemBasicInformation, &sbi, sizeof(SYSTEM_BASIC_INFORMATION), &ulBytesRead);
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
@@ -419,8 +451,28 @@ uintptr_t load(uintptr_t current_base) {
 	if (_new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size) {
 		while (_import->Name) {
 			const char* importName = (const char*)((uintptr_t)new_module_base + _import->Name);
+			HMODULE loadedModule = 0;
+			MODULEHASH mhModuleHash = static_x65599(importName);
+			// check to see if the module is already loaded by 
+			// walking the LdrpHashTable
+			if (pLdrpHashTable)
+			{
+				ULONG ulHashTableOffset = mhModuleHash & 0x1f;		
+				PVOID pHashTableData = pLdrpHashTable[ulHashTableOffset].Flink;
+				if (pHashTableData != *(PVOID*)pHashTableData) {
+					PLDR_DATA_TABLE_ENTRY pLdrDteModule = (PLDR_DATA_TABLE_ENTRY)((PBYTE)pHashTableData - 0x70);
+					loadedModule = (HMODULE)pLdrDteModule->DllBase;
+				}
+			}
 
-			HMODULE loadedModule = stubLoadLibraryA(importName);
+			if(!loadedModule) {
+				loadedModule = stubLoadLibraryA(importName);
+			}
+
+#ifdef _LOADER_DEBUG
+			printf("%s - %p\n", importName, loadedModule);
+#endif
+			
 
 			// Walk through all of the imports this dll has
 			PIMAGE_THUNK_DATA pImgThunk = (PIMAGE_THUNK_DATA)(_import->FirstThunk + (uintptr_t)new_module_base);
@@ -436,7 +488,10 @@ uintptr_t load(uintptr_t current_base) {
 					stubRtlInitAnsiString(&astrFunc, pFname->Name);
 					status = stubLdrGetProcedureAddress(loadedModule, &astrFunc, NULL, &(pImgThunk->u1.Function));
 					if (!NT_SUCCESS(status)) {
-						return -999;
+#ifdef _LOADER_DEBUG
+						printf("Failed to load from %s - %p\n", importName, loadedModule);
+#endif
+						return status;
 					}
 				}
 
@@ -470,7 +525,7 @@ uintptr_t load(uintptr_t current_base) {
 				//pImgThunk->u1.Function = (ULONGLONG)stubGetProcAddress(hDelayLib, pFname->Name);
 				status = stubLdrGetProcedureAddress(hDelayLib, &astrFunc, NULL, &(pImgThunk->u1.Function));
 				if (!status) {
-					return -999;
+					return status;
 				}
 				pOriginalThunk++;
 				pImgThunk++;

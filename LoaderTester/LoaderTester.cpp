@@ -5,7 +5,10 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#define _LOADER_DEBUG
 #include "../StinkyLoader/loader.h"
+
+
 
 const char* help = R"(
 wrong args:
@@ -118,7 +121,7 @@ BOOL do_rload(char* dll) {
         printf("Failed with status %p\n", lpNewBase);
         return FALSE;
     }
-
+    printf("Status %p\n", lpNewBase);
     return lpNewBase != 0;
 }
 

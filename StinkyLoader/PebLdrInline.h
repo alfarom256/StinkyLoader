@@ -104,3 +104,69 @@ __forceinline void* get_from_ldr_data(PLDR_DATA pLdrDataIn, APIHASH dwHash) {
 	}
 	return NULL;
 }
+
+static BYTE prelude1[7]{
+	0x4D, 0x8d, 0x4b, 0xf0, // lea r9, [r11-10h]
+	0x45, 0x33, 0xc0 // xor r8d, r8d
+};
+
+static BYTE prelude2[9] = {
+	0x44, 0x8B, 0xC5,
+	0x48, 0x8B, 0xD6,
+	0x48, 0x8B, 0xCF
+};
+
+static BYTE prelude3[9] = {
+	0x48, 0x83, 0xEC, 0x20, //sub rsp, 20h
+	0x44, 0x8B,	0x7C, 0x24, 0x70 //mov r15d, [rsp+48h+arg_20]
+};
+
+#pragma pack(push)
+#pragma pack(1)
+typedef struct _call_rel32 {
+	BYTE opcode;
+	LONG offset;
+}call_rel32, * pcall_rel32;
+
+typedef struct _lea_rel32 {
+	BYTE lea[3];
+	LONG offset;
+}lea_rel32, * plea_rel32;
+#pragma pack(pop)
+
+__forceinline MODULEHASH static_x65599(const char* src) {
+	MODULEHASH mhModuleHash = 0;
+	for (int i = 0; src[i]; i++) {
+
+		if (src[i] >= 'a' && src[i] <= 'z') {
+			mhModuleHash = 65599 * mhModuleHash + (src[i] - 0x20);
+		}
+		else {
+			mhModuleHash = 65599 * mhModuleHash + src[i];
+		}
+
+	}
+	return mhModuleHash;
+}
+
+
+#pragma intrinsic(memcmp)
+__forceinline PVOID findPattern(PVOID buf, PBYTE pattern, ULONG ulLength) {
+	PBYTE pBuf = (PBYTE)buf;
+
+	while (TRUE) {
+		// check for return "ret; int3"
+		DWORD wCheckRet = *(PDWORD)pBuf;
+		if (wCheckRet == 0xCCCCCCC3) {
+			return NULL;
+		}
+
+		BOOL res = !memcmp(pBuf, pattern, ulLength);
+
+		if (res) {
+			return pBuf;
+		}
+
+		pBuf += 1;
+	}
+}
