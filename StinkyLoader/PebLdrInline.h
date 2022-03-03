@@ -170,3 +170,10 @@ __forceinline PVOID findPattern(PVOID buf, PBYTE pattern, ULONG ulLength) {
 		pBuf += 1;
 	}
 }
+
+__forceinline BOOL _wcstombs(const char* src, PVOID dest, PULONG pBufferSize) {
+	for (size_t i = 0; src[i]; i++)
+	{
+
+	}
+}

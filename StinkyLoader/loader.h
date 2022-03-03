@@ -26,6 +26,7 @@ typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
 
 // ntdll
 typedef NTSTATUS(WINAPI* pLdrLoadDll)(PWCHAR, ULONG, PUNICODE_STRING, PHANDLE);
+typedef NTSTATUS(WINAPI* pRtlAnsiStringToUnicodeString)(PUNICODE_STRING, PCANSI_STRING, BOOLEAN);
 typedef NTSTATUS(WINAPI* pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 typedef NTSTATUS(WINAPI* pNtProtectVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
 typedef NTSTATUS(WINAPI* pNtFreeVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG);
@@ -54,7 +55,7 @@ typedef struct
 
 
 // BEGIN LOADER FUNCTION
-#pragma intrinsic(memcpy)
+#pragma intrinsic(strlen)
 #pragma runtime_checks("", off)
 __declspec(code_seg(".shlc"))
 __declspec(guard(ignore))
@@ -88,8 +89,9 @@ uintptr_t load(uintptr_t current_base) {
 	if (!init_ldr_data(&ldrNtdll, (HMODULE)ntbase)) {
 		return ERROR_LOADER_INIT_FAILED;
 	}
-
 	// end initialize loader data
+
+	UNICODE_STRING UnicodeString = { 0 };
 	ANSI_STRING astrFunc = { 0 };
 	SYSTEM_BASIC_INFORMATION sbi = { 0 };
 	pcall_rel32 pc32 = { 0 };
@@ -134,18 +136,22 @@ uintptr_t load(uintptr_t current_base) {
 	constexpr DWORD cdwNtFreeVirtualMemory = cexpr_adler32("NtFreeVirtualMemory");
 	constexpr DWORD cdwNtProtectVirtualMemory = cexpr_adler32("NtProtectVirtualMemory");
 	constexpr DWORD cdwLdrGetDllHandleByName = cexpr_adler32("LdrGetDllHandleByName");
+	constexpr DWORD cdwLdrLoadDll = cexpr_adler32("LdrLoadDll");
+	constexpr DWORD cdwRtlAnsiStringToUnicodeString = cexpr_adler32("RtlAnsiStringToUnicodeString");
 #ifdef _WIN64
 	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
 #endif
 
 	//ntdll stubs
 	PVOID pLdrGetDllHandleByName = NULL;
+	pLdrLoadDll stubLdrLoadDll = NULL;
 	pNtQuerySystemInformation stubNtQuerySystemInformation = NULL;
 	pNtProtectVirtualMemory stubNtProtectVirtualMemory = NULL;
 	pNtAllocateVirtualMemory stubNtAllocateVirtualMemory = NULL;
 	pNtFreeVirtualMemory stubNtFreeVirtualMemory = NULL;
 	pRtlInitAnsiString stubRtlInitAnsiString = NULL;
 	pLdrGetProcedureAddress stubLdrGetProcedureAddress = NULL;
+	pRtlAnsiStringToUnicodeString stubRtlAnsiStringToUnicodeString = NULL;
 #ifdef _WIN64
 	pRtlAddFunctionTable stubRtlAddFunctionTable = NULL;
 #endif
@@ -205,9 +211,17 @@ uintptr_t load(uintptr_t current_base) {
 	if (!pLdrGetDllHandleByName)
 		return -51;
 
+	stubLdrLoadDll = (pLdrLoadDll)get_from_ldr_data(&ldrNtdll, cdwLdrLoadDll);
+	if (!stubLdrLoadDll)
+		return -52;
+
+	stubRtlAnsiStringToUnicodeString = (pRtlAnsiStringToUnicodeString)get_from_ldr_data(&ldrNtdll, cdwRtlAnsiStringToUnicodeString);
+	if (!stubRtlAnsiStringToUnicodeString)
+		return -53;
+
 
 	/* =================================================================================
-	*  Set up everything needed for the LdrpHashTable searching
+	*  0. Set up everything needed for the LdrpHashTable searching
 	================================================================================= */
 	pPattern = findPattern(pLdrGetDllHandleByName, prelude1, sizeof(prelude1));
 	if (pPattern) {
@@ -445,6 +459,22 @@ uintptr_t load(uintptr_t current_base) {
 	/* =============
 	* 8. Process IAT
 	============= */
+	// allocate some memory to hold the buffer for the UNICODE_STRING required by LdrLoadDll
+
+	/*
+		status = stubNtAllocateVirtualMemory(
+			hCurrentProcess,
+			&new_module_base,
+			NULL,
+			&szAllocation,
+			MEM_COMMIT,
+			PAGE_READWRITE
+		);
+	*/
+
+
+	if (!NT_SUCCESS(status))
+		return -42069;
 
 	// Normal imports
 	PIMAGE_IMPORT_DESCRIPTOR _import = (PIMAGE_IMPORT_DESCRIPTOR)(_new_nt_hdr->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress + (uintptr_t)new_module_base);
@@ -466,7 +496,19 @@ uintptr_t load(uintptr_t current_base) {
 			}
 
 			if(!loadedModule) {
-				loadedModule = stubLoadLibraryA(importName);
+				astrFunc.Buffer = (PCHAR)importName;
+				astrFunc.Length = (USHORT)strlen(importName);
+				astrFunc.MaximumLength = astrFunc.Length + 1;
+				stubRtlAnsiStringToUnicodeString(&UnicodeString, &astrFunc, TRUE);
+				status = stubLdrLoadDll(NULL, NULL, &UnicodeString, (PHANDLE)&loadedModule);
+				if (!NT_SUCCESS(status)) {
+#ifdef _LOADER_DEBUG
+					printf("LdrLoadDll Failed - 0x%x\n", status);
+#endif
+				}
+				if (!loadedModule)
+					return -420690;
+
 			}
 
 #ifdef _LOADER_DEBUG

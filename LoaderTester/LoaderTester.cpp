@@ -8,8 +8,6 @@
 #define _LOADER_DEBUG
 #include "../StinkyLoader/loader.h"
 
-
-
 const char* help = R"(
 wrong args:
    dummyloader.exe load/rload/xload dllname.dll 
