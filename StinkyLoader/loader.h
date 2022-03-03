@@ -19,11 +19,10 @@
 typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
 typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
-typedef void (WINAPI* pGetNativeSystemInfo)(LPSYSTEM_INFO);
-typedef BOOL(WINAPI* pVirtualFree)(LPVOID, SIZE_T, DWORD);
-typedef HANDLE(WINAPI* pCreateThread)(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 
 // ntdll
+typedef NTSTATUS(WINAPI* pLdrLoadDll)(PWCHAR, ULONG, PUNICODE_STRING, PHANDLE);
+typedef NTSTATUS(WINAPI* pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 typedef NTSTATUS(WINAPI* pNtProtectVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
 typedef NTSTATUS(WINAPI* pNtFreeVirtualMemory)(HANDLE, PVOID*, PSIZE_T, ULONG);
 typedef NTSTATUS(WINAPI* pNtAllocateVirtualMemory)(HANDLE, PVOID, ULONG_PTR, PSIZE_T, ULONG, ULONG);
@@ -92,7 +91,6 @@ uintptr_t load(uintptr_t current_base) {
 	uintptr_t address_of_entry = 0;
 	LPVOID new_module_base = NULL;
 	uintptr_t baseOffset = 0;
-	SYSTEM_INFO SystemInfo = { 0 };
 	SIZE_T szAllocation = 0;
 	SIZE_T szAllocationBase = 0;
 	NTSTATUS status = 0;
@@ -108,7 +106,7 @@ uintptr_t load(uintptr_t current_base) {
 	IMAGE_DOS_HEADER* _new_dos_hdr = NULL;
 	IMAGE_NT_HEADERS* _new_nt_hdr = NULL;
 	IMAGE_EXPORT_DIRECTORY* _new_export_dir = NULL;
-
+	SYSTEM_BASIC_INFORMATION sbi = { 0 };
 	PDWORD funcTbl = NULL;
 	PWORD ordTbl = NULL;
 	PVOID nameTbl = NULL;
@@ -117,14 +115,13 @@ uintptr_t load(uintptr_t current_base) {
 	// kernel32 hashes
 	constexpr DWORD cdwLoadLibraryA = cexpr_adler32("LoadLibraryA");
 	constexpr DWORD cdwFlushInstructionCache = cexpr_adler32("FlushInstructionCache");
-	constexpr DWORD cdwGetNativeSystemInfo = cexpr_adler32("GetNativeSystemInfo");
 
 	// k32 stubs
 	pLoadLibraryA stubLoadLibraryA = NULL;
 	pFlushInstructionCache stubFlushInstructionCache = NULL;
-	pGetNativeSystemInfo stubGetNativeSystemInfo = NULL;
 
 	// ntdll hashes
+	constexpr DWORD cdwNtQuerySystemInformation = cexpr_adler32("NtQuerySystemInformation");
 	constexpr DWORD cdwRtlInitAnsiString = cexpr_adler32("RtlInitAnsiString");
 	constexpr DWORD cdwLdrGetProcedureAddress = cexpr_adler32("LdrGetProcedureAddress");
 	constexpr DWORD cdwNtAllocateVirtualMemory = cexpr_adler32("NtAllocateVirtualMemory");
@@ -135,6 +132,7 @@ uintptr_t load(uintptr_t current_base) {
 #endif
 
 	//ntdll stubs
+	pNtQuerySystemInformation stubNtQuerySystemInformation = NULL;
 	pNtProtectVirtualMemory stubNtProtectVirtualMemory = NULL;
 	pNtAllocateVirtualMemory stubNtAllocateVirtualMemory = NULL;
 	pNtFreeVirtualMemory stubNtFreeVirtualMemory = NULL;
@@ -158,15 +156,15 @@ uintptr_t load(uintptr_t current_base) {
 	if (!stubFlushInstructionCache)
 		return -43;
 
-	stubGetNativeSystemInfo = (pGetNativeSystemInfo)get_from_ldr_data(&ldrKernel32, cdwGetNativeSystemInfo);
-	if (!stubGetNativeSystemInfo)
-		return -44;
-
 	/*
 	======================================================
 	IMPORTING NEEDED FUNCTIONS FROM NTDLL
 	======================================================
 	*/
+	stubNtQuerySystemInformation = (pNtQuerySystemInformation)get_from_ldr_data(&ldrNtdll, cdwNtQuerySystemInformation);
+	if (!stubNtQuerySystemInformation)
+		return -44;
+
 	stubNtProtectVirtualMemory = (pNtProtectVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtProtectVirtualMemory);
 	if (!stubNtProtectVirtualMemory)
 		return -42;
@@ -230,9 +228,17 @@ uintptr_t load(uintptr_t current_base) {
 		}
 	}
 	// https://github.com/fancycode/MemoryModule/blob/master/MemoryModule.c#L613
-	stubGetNativeSystemInfo(&SystemInfo);
-	size_t alignedImageSize = AlignValueUp(_old_nt_hdr->OptionalHeader.SizeOfImage, SystemInfo.dwPageSize);
-	if (alignedImageSize != AlignValueUp(lastSectionEnd, SystemInfo.dwPageSize)) {
+	ULONG ulBytesRead = 0;
+	DWORD dwPageSize = 0;
+
+	status = stubNtQuerySystemInformation(SystemBasicInformation, &sbi, sizeof(ULONG), &ulBytesRead);
+	if (!NT_SUCCESS(status)) {
+		return status;
+	}
+
+	dwPageSize = *(DWORD*)(sbi.Reserved1 + 2);
+	size_t alignedImageSize = AlignValueUp(_old_nt_hdr->OptionalHeader.SizeOfImage, dwPageSize);
+	if (alignedImageSize != AlignValueUp(lastSectionEnd, dwPageSize)) {
 		return -9;
 	}
 
