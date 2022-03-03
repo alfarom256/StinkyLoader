@@ -666,9 +666,33 @@ uintptr_t load(uintptr_t current_base) {
 	uintptr_t entrypoint = _new_nt_hdr->OptionalHeader.AddressOfEntryPoint + (uintptr_t)new_module_base;
 	pDllMain stubDllMain = (pDllMain)(entrypoint);
 	
-	// zero DOS and NT headers
-	__stosb((unsigned char*)_new_dos_hdr, 0, sizeof(IMAGE_DOS_HEADER));
-	__stosb((unsigned char*)_new_nt_hdr, 0, sizeof(IMAGE_NT_HEADERS));
+	// Fill DOS and NT headers with garbage
+	WORD tmpRand = 0;
+	for (size_t i = 0; i < sizeof(IMAGE_DOS_HEADER); i++)
+	{
+		if (!_rdrand16_step(&tmpRand)) {
+			((PBYTE)_new_dos_hdr)[i] = 0;
+		}
+		else {
+			((PBYTE)_new_dos_hdr)[i] = ((PBYTE)&tmpRand)[0];
+		}	
+#ifdef _LOADER_DEBUG
+		printf(" %x", ((PBYTE)_new_dos_hdr)[i]);
+#endif
+	}
+
+	for (size_t i = 0; i < sizeof(IMAGE_NT_HEADERS); i++)
+	{
+		if (!_rdrand16_step(&tmpRand)) {
+			((PBYTE)_new_nt_hdr)[i] = 0;
+		}
+		else {
+			((PBYTE)_new_nt_hdr)[i] = ((PBYTE)&tmpRand)[0];
+		}
+#ifdef _LOADER_DEBUG
+		printf(" %x", ((PBYTE)_new_nt_hdr)[i]);
+#endif
+	}
 
 	stubDllMain((HINSTANCE)new_module_base, DLL_PROCESS_ATTACH, NULL);
 	return (uintptr_t)new_module_base;
