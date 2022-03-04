@@ -2,6 +2,9 @@
 	TODOS:
 		1. Check allocations with NtAllocateVirtualMemory, ensure size allocated >= size required
 		2. Remove duplicate vars
+		3. ASM stub for cal $-5 pop rax instead of uintptr_t argument
+		4. NtMapViewOfSection remap instead of FlushInstructionCache
+		5. cool ascii art
 */
 
 
@@ -681,19 +684,6 @@ uintptr_t load(uintptr_t current_base) {
 		printf(" %x", ((PBYTE)_new_dos_hdr)[i]);
 #endif
 	}
-//
-//	for (size_t i = 0; i < sizeof(IMAGE_NT_HEADERS); i++)
-//	{
-//		if (!_rdrand16_step(&tmpRand)) {
-//			((PBYTE)_new_nt_hdr)[i] = 0;
-//		}
-//		else {
-//			((PBYTE)_new_nt_hdr)[i] = ((PBYTE)&tmpRand)[0];
-//		}
-//#ifdef _LOADER_DEBUG
-//		printf(" %x", ((PBYTE)_new_nt_hdr)[i]);
-//#endif
-//	}
 
 	stubDllMain((HINSTANCE)new_module_base, DLL_PROCESS_ATTACH, NULL);
 	return (uintptr_t)new_module_base;
