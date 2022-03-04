@@ -668,7 +668,8 @@ uintptr_t load(uintptr_t current_base) {
 	
 	// Fill DOS and NT headers with garbage
 	WORD tmpRand = 0;
-	for (size_t i = 0; i < sizeof(IMAGE_DOS_HEADER); i++)
+	ptrdiff_t szAllHeaders = ((uintptr_t)_new_nt_hdr + sizeof(IMAGE_NT_HEADERS)) - (uintptr_t)_new_dos_hdr;
+	for (size_t i = 0; i < szAllHeaders; i++)
 	{
 		if (!_rdrand16_step(&tmpRand)) {
 			((PBYTE)_new_dos_hdr)[i] = 0;
@@ -680,19 +681,19 @@ uintptr_t load(uintptr_t current_base) {
 		printf(" %x", ((PBYTE)_new_dos_hdr)[i]);
 #endif
 	}
-
-	for (size_t i = 0; i < sizeof(IMAGE_NT_HEADERS); i++)
-	{
-		if (!_rdrand16_step(&tmpRand)) {
-			((PBYTE)_new_nt_hdr)[i] = 0;
-		}
-		else {
-			((PBYTE)_new_nt_hdr)[i] = ((PBYTE)&tmpRand)[0];
-		}
-#ifdef _LOADER_DEBUG
-		printf(" %x", ((PBYTE)_new_nt_hdr)[i]);
-#endif
-	}
+//
+//	for (size_t i = 0; i < sizeof(IMAGE_NT_HEADERS); i++)
+//	{
+//		if (!_rdrand16_step(&tmpRand)) {
+//			((PBYTE)_new_nt_hdr)[i] = 0;
+//		}
+//		else {
+//			((PBYTE)_new_nt_hdr)[i] = ((PBYTE)&tmpRand)[0];
+//		}
+//#ifdef _LOADER_DEBUG
+//		printf(" %x", ((PBYTE)_new_nt_hdr)[i]);
+//#endif
+//	}
 
 	stubDllMain((HINSTANCE)new_module_base, DLL_PROCESS_ATTACH, NULL);
 	return (uintptr_t)new_module_base;
