@@ -27,6 +27,8 @@ typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
 
 // ntdll
+typedef NTSTATUS(WINAPI* pNtMapViewOfSection)(HANDLE, HANDLE, PVOID, ULONG, ULONG, PDWORD64, PULONG, ULONG, ULONG, ULONG);
+typedef NTSTATUS(WINAPI* pNtUnmapViewOfSection)(HANDLE, PVOID);
 typedef VOID(WINAPI* pRtlFreeUnicodeString)(PUNICODE_STRING);
 typedef NTSTATUS(WINAPI* pLdrLoadDll)(PWCHAR, ULONG, PUNICODE_STRING, PHANDLE);
 typedef NTSTATUS(WINAPI* pRtlAnsiStringToUnicodeString)(PUNICODE_STRING, PCANSI_STRING, BOOLEAN);
@@ -79,16 +81,8 @@ uintptr_t load(uintptr_t current_base) {
 	}
 
 	// begin initialize loader data
-	uintptr_t k32base = (uintptr_t)getK32();
 	uintptr_t ntbase = (uintptr_t)getNtdll();
-
-	LDR_DATA ldrKernel32 = { 0 };
 	LDR_DATA ldrNtdll = { 0 };
-
-	if (!init_ldr_data(&ldrKernel32, (HMODULE)k32base)) {
-		return ERROR_LOADER_INIT_FAILED;
-	}
-
 	if (!init_ldr_data(&ldrNtdll, (HMODULE)ntbase)) {
 		return ERROR_LOADER_INIT_FAILED;
 	}
@@ -123,12 +117,6 @@ uintptr_t load(uintptr_t current_base) {
 	PVOID nameTbl = NULL;
 	DWORD num_exp = 0;
 
-	// kernel32 hashes
-	constexpr DWORD cdwFlushInstructionCache = cexpr_adler32("FlushInstructionCache");
-
-	// k32 stubs
-	pFlushInstructionCache stubFlushInstructionCache = NULL;
-
 	// ntdll hashes
 	constexpr DWORD cdwNtQuerySystemInformation = cexpr_adler32("NtQuerySystemInformation");
 	constexpr DWORD cdwRtlInitAnsiString = cexpr_adler32("RtlInitAnsiString");
@@ -140,6 +128,9 @@ uintptr_t load(uintptr_t current_base) {
 	constexpr DWORD cdwLdrLoadDll = cexpr_adler32("LdrLoadDll");
 	constexpr DWORD cdwRtlAnsiStringToUnicodeString = cexpr_adler32("RtlAnsiStringToUnicodeString");
 	constexpr DWORD cdwRtlFreeUnicodeString = cexpr_adler32("RtlFreeUnicodeString");
+	constexpr DWORD cdwNtMapViewOfSection = cexpr_adler32("NtMapViewOfSection");
+	constexpr DWORD cdwNtUnmapViewOfSection = cexpr_adler32("NtUnmapViewOfSection");
+
 #ifdef _WIN64
 	constexpr DWORD cdwRtlAddFunctionTable = cexpr_adler32("RtlAddFunctionTable");
 #endif
@@ -155,20 +146,12 @@ uintptr_t load(uintptr_t current_base) {
 	pLdrGetProcedureAddress stubLdrGetProcedureAddress = NULL;
 	pRtlAnsiStringToUnicodeString stubRtlAnsiStringToUnicodeString = NULL;
 	pRtlFreeUnicodeString stubRtlFreeUnicodeString = NULL;
+	pNtMapViewOfSection stubNtMapViewOfSection = NULL;
+	pNtUnmapViewOfSection stubNtUnmapViewOfSection = NULL;
 #ifdef _WIN64
 	pRtlAddFunctionTable stubRtlAddFunctionTable = NULL;
 #endif
 
-	/*
-	======================================================
-	IMPORTING NEEDED FUNCTIONS FROM K32
-	======================================================
-	*/
-
-
-	stubFlushInstructionCache = (pFlushInstructionCache)get_from_ldr_data(&ldrKernel32, cdwFlushInstructionCache);
-	if (!stubFlushInstructionCache)
-		return -43;
 
 	/*
 	======================================================
@@ -222,6 +205,14 @@ uintptr_t load(uintptr_t current_base) {
 	stubRtlFreeUnicodeString = (pRtlFreeUnicodeString)get_from_ldr_data(&ldrNtdll, cdwRtlFreeUnicodeString);
 	if (!stubRtlFreeUnicodeString)
 		return -54;
+
+	stubNtMapViewOfSection = (pNtMapViewOfSection)get_from_ldr_data(&ldrNtdll, cdwNtMapViewOfSection);
+	if (!stubNtMapViewOfSection)
+		return -55;
+
+	stubNtUnmapViewOfSection = (pNtUnmapViewOfSection)get_from_ldr_data(&ldrNtdll, cdwNtUnmapViewOfSection);
+	if (!stubNtUnmapViewOfSection)
+		return -56;
 
 
 	/* =================================================================================
@@ -479,12 +470,16 @@ uintptr_t load(uintptr_t current_base) {
 			{
 				ULONG ulHashTableOffset = mhModuleHash & 0x1f;		
 				PVOID pHashTableData = pLdrpHashTable[ulHashTableOffset].Flink;
+				// if it is loaded, the pointer to the list entry should not equal it's Flink or Blink
 				if (pHashTableData != *(PVOID*)pHashTableData) {
 					PLDR_DATA_TABLE_ENTRY pLdrDteModule = (PLDR_DATA_TABLE_ENTRY)((PBYTE)pHashTableData - 0x70);
+					// once we've found the data table entry, set the HMODULE to the base
+					// and skip a call to LdrLoadDll/GetModuleHandle
 					loadedModule = (HMODULE)pLdrDteModule->DllBase;
 				}
 			}
 
+			// otherwise, load it with LdrLoadDll
 			if(!loadedModule) {
 				stubRtlInitAnsiString(&astrFunc, (PCSZ)importName);
 				stubRtlAnsiStringToUnicodeString(&UnicodeString, &astrFunc, TRUE);
@@ -629,8 +624,25 @@ uintptr_t load(uintptr_t current_base) {
 		}
 
 	}
+	/*
+	NtMapViewOfSection(
+             TargetHandle,
+             (HANDLE)0xFFFFFFFFFFFFFFFFi64,
+             &BaseAddress,
+             0i64,
+             0x4000ui64,
+             0i64,
+             &ViewSize,
+             ViewUnmap,
+             0x100000u,
+             4u) < 0 );	
+	*/
+	PVOID pBaseAddrMapUnmap = NULL;
+	ULONG ulViewSize = 0;
 
-	stubFlushInstructionCache(hCurrentProcess, NULL, 0);
+	// emulate KernelBase!FlushInstructionCache(-1, NULL, 0)
+	stubNtMapViewOfSection(hCurrentProcess, (HANDLE)-1, &pBaseAddrMapUnmap, NULL, 0x4000, NULL, &ulViewSize, 2, MEM_TOP_DOWN, PAGE_READWRITE);
+	stubNtUnmapViewOfSection(hCurrentProcess, pBaseAddrMapUnmap);
 	/*
 	======================================================
 	EXCEPTION PROCESSING
@@ -671,7 +683,7 @@ uintptr_t load(uintptr_t current_base) {
 	
 	// Fill DOS and NT headers with garbage
 	WORD tmpRand = 0;
-	ptrdiff_t szAllHeaders = ((uintptr_t)_new_nt_hdr + sizeof(IMAGE_NT_HEADERS)) - (uintptr_t)_new_dos_hdr;
+	size_t szAllHeaders = ((uintptr_t)_new_nt_hdr + sizeof(IMAGE_NT_HEADERS)) - (uintptr_t)_new_dos_hdr;
 	for (size_t i = 0; i < szAllHeaders; i++)
 	{
 		if (!_rdrand16_step(&tmpRand)) {
