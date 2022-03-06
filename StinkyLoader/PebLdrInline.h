@@ -29,7 +29,6 @@ __forceinline HMODULE getNtdll() {
 typedef DWORD APIHASH;
 typedef ULONG MODULEHASH;
 
-#define MODULEHASH_NTDLL ((MODULEHASH)0xf46857d4)
 #define MOD_ADLER 65521
 
 constexpr DWORD cexpr_adler32(const char* src) {

