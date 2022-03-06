@@ -1,10 +1,10 @@
 /*
 	TODOS:
+		0. Unhook ntdll
 		1. Check allocations with NtAllocateVirtualMemory, ensure size allocated >= size required
 		2. Remove duplicate vars
 		3. ASM stub for cal $-5 pop rax instead of uintptr_t argument
-		4. NtMapViewOfSection remap instead of FlushInstructionCache
-		5. cool ascii art
+		4. cool ascii art
 */
 
 

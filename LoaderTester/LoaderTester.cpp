@@ -116,10 +116,10 @@ BOOL do_rload(char* dll) {
     uintptr_t lpNewBase = load((uintptr_t)lpBuf);
 
     if ((lpNewBase & 0xFF00000000000000) > 0) {
-        printf("Failed with status %p\n", lpNewBase);
+        printf("Failed with status %p\n", (PVOID)lpNewBase);
         return FALSE;
     }
-    printf("Status %p\n", lpNewBase);
+    printf("Status %p\n", (PVOID)lpNewBase);
     return lpNewBase != 0;
 }
 
@@ -153,7 +153,7 @@ BOOL do_xload(char* dll)
 
     pInit reflective_routine = (pInit)lpBuf;
     uintptr_t lpNewBase = reflective_routine((uintptr_t)lpBuf);
-    printf("New Base : %p\n", lpNewBase);
+    printf("New Base : %p\n", (PVOID)lpNewBase);
     while(TRUE){}
     return lpNewBase != NULL;
 }
