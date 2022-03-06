@@ -100,9 +100,11 @@ uintptr_t load(uintptr_t current_base) {
 	}
 
 	// xor decode the payload
-	for (size_t i = 0; i < dwLenPayload; i++)
-	{
-		((PBYTE)old_base_addr)[i] ^= pXorKey[i % dwXorKeyLen];
+	if (dwXorKeyLen > 0) {
+		for (size_t i = 0; i < dwLenPayload; i++)
+		{
+			((PBYTE)old_base_addr)[i] ^= pXorKey[i % dwXorKeyLen];
+		}
 	}
 
 
