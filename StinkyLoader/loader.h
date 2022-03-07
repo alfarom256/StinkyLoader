@@ -107,20 +107,6 @@ uintptr_t load(uintptr_t current_base) {
 		}
 	}
 
-
-	// find the offset of the payload from our reflective loader prelude
-	
-	//while (cbPeHeaderOffset < MAXIMUM_HEADER_SEARCH_BYTES) {
-	//	if (IS_PE_MAGIC(*(WORD*)old_base_addr)) {
-	//		break;
-	//	}
-	//	old_base_addr++;
-	//}
-	//if (cbPeHeaderOffset == MAXIMUM_HEADER_SEARCH_BYTES)
-	//{
-	//	return ERROR_HDR_NOT_FOUND;
-	//}
-
 	// begin initialize loader data
 	uintptr_t ntbase = (uintptr_t)getNtdll();
 	LDR_DATA ldrNtdll = { 0 };
@@ -665,19 +651,7 @@ uintptr_t load(uintptr_t current_base) {
 		}
 
 	}
-	/*
-	NtMapViewOfSection(
-             TargetHandle,
-             (HANDLE)0xFFFFFFFFFFFFFFFFi64,
-             &BaseAddress,
-             0i64,
-             0x4000ui64,
-             0i64,
-             &ViewSize,
-             ViewUnmap,
-             0x100000u,
-             4u) < 0 );	
-	*/
+
 	PVOID pBaseAddrMapUnmap = NULL;
 	ULONG ulViewSize = 0;
 

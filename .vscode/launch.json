@@ -1,0 +1,26 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+    
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "-d",
+                "-o", "${workspaceFolder}/x64/Release/rtest.bin",
+                "-f", "${workspaceFolder}/x64/Release/DummyDll.dll",
+                "-pe", "${workspaceFolder}/x64/Release/StinkyLoader.exe",
+                "-sct",".shlc",
+                "-xor", "7374696e6b796c6f6164657274657374696e67313233",
+                "--dump-shellcode", "${workspaceFolder}/loader_shellcode.blob"
+            ]
+        }
+    ]
+}
