@@ -15,7 +15,9 @@ Features:
 
 Description:
 
-C++ implementation of a reflective loader.
+StinkyLoader - C++ implementation of a reflective loader.
+
+LoaderTester - C++ project to aid in testing the loader during development.
 
 Build steps:
 
@@ -24,6 +26,12 @@ Build project in release mode in VS (I use 2019).
 Run the provided python script to extract the loader shellcode and prepend to your target dll.
 
 ` python .\Python\generate.py -o <OUTPUT_FILE> -f <TARGET_DLL>.dll -pe .\x64\Release\StinkyLoader.exe -sct .shlc -xor <YOUR_HEX_XOR_KEY_HERE> --dump-shellcode <SHELLCODE_BLOB_OUTPUT_HERE>`
+
+To debug / test your own reflective loader, you can run the LoaderTester with one of the following arguments:
+
+`xload <PAYLOAD_DLL>.dll ` - reflectively load the payload by executing the PIC loader 
+
+`rload <PAYLOAD_DLL>.dll` - reflectively load the dll by testing the `load` function in StinkyLoader
 
 Todos:
 
