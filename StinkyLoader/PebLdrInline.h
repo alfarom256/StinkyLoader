@@ -28,6 +28,7 @@ __forceinline HMODULE getNtdll() {
 
 typedef DWORD APIHASH;
 typedef ULONG MODULEHASH;
+#define MODULEHASH_NTDLL ((MODULEHASH)0xf46857d4)
 
 #define MOD_ADLER 65521
 
@@ -59,7 +60,7 @@ typedef struct LdrData {
 	PDWORD p_eat_ptrtbl;
 	PWORD p_eat_ordtbl;
 	size_t num_exp;
-} LDR_DATA, *PLDR_DATA;
+} LDR_DATA, * PLDR_DATA;
 
 __forceinline BOOL init_ldr_data(PLDR_DATA pLdrDataIn, HMODULE hMod) {
 	if (pLdrDataIn == NULL)
@@ -148,6 +149,20 @@ __forceinline MODULEHASH static_x65599(const char* src) {
 	return mhModuleHash;
 }
 
+constexpr MODULEHASH cexpr_x65599(const char* src) {
+	MODULEHASH mhModuleHash = 0;
+	for (int i = 0; src[i]; i++) {
+
+		if (src[i] >= 'a' && src[i] <= 'z') {
+			mhModuleHash = 65599 * mhModuleHash + (src[i] - 0x20);
+		}
+		else {
+			mhModuleHash = 65599 * mhModuleHash + src[i];
+		}
+
+	}
+	return mhModuleHash;
+}
 
 #pragma intrinsic(memcmp)
 __forceinline PVOID findPattern(PVOID buf, PBYTE pattern, ULONG ulLength) {
@@ -165,14 +180,6 @@ __forceinline PVOID findPattern(PVOID buf, PBYTE pattern, ULONG ulLength) {
 		if (res) {
 			return pBuf;
 		}
-
 		pBuf += 1;
-	}
-}
-
-__forceinline BOOL _wcstombs(const char* src, PVOID dest, PULONG pBufferSize) {
-	for (size_t i = 0; src[i]; i++)
-	{
-
 	}
 }

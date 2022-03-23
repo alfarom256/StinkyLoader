@@ -154,7 +154,6 @@ BOOL do_xload(char* dll)
     pInit reflective_routine = (pInit)lpBuf;
     uintptr_t lpNewBase = reflective_routine((uintptr_t)lpBuf);
     printf("New Base : %p\n", (PVOID)lpNewBase);
-    while(TRUE){}
     return lpNewBase != NULL;
 }
 
